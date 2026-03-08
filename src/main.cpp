@@ -15,6 +15,10 @@
 // 如需改成 HSPI 或自定义 SPI 引脚，可以改用另一个构造函数
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 
+// 用于轮播图片的索引与定时
+static size_t currentImageIndex = 0;
+static unsigned long lastSwitchTime = 0;
+
 void setup()
 {
   if (TFT_BL >= 0)
@@ -27,13 +31,28 @@ void setup()
   tft.init(240, 240);
   tft.setRotation(1); // 0~3，按需要选择显示方向
 
-  // 显示整张 plana 图片
+  // 先显示第一张图片（索引 0）
   tft.fillScreen(ST77XX_BLACK);
-  tft.drawRGBBitmap(0, 0, planaImg, planaWidth, planaHeight);
+  tft.drawRGBBitmap(0, 0, (uint16_t *)planaImages[currentImageIndex], planaWidth, planaHeight);
+  lastSwitchTime = millis();
 }
 
 void loop()
 {
-  // 这里暂时不用做任何事，保持显示图片
+  // 每隔 5 秒切换到下一张图片
+  unsigned long now = millis();
+  if (now - lastSwitchTime >= 5000UL)
+  {
+    currentImageIndex++;
+    if (currentImageIndex >= planaImageCount)
+    {
+      currentImageIndex = 0;
+    }
+
+    tft.fillScreen(ST77XX_BLACK);
+    tft.drawRGBBitmap(0, 0, (uint16_t *)planaImages[currentImageIndex], planaWidth, planaHeight);
+    lastSwitchTime = now;
+  }
+
   delay(100);
 }
