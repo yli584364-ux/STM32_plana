@@ -10,8 +10,8 @@
     button { font-size: 1.1rem; padding: 0.6rem 1.2rem; margin: 0.3rem; border-radius: 6px; border: none; cursor: pointer; }
     .prev { background: #444; color: #fff; }
     .next { background: #2979ff; color: #fff; }
-    .idx-input { margin-top: 1rem; }
-    input[type="number"] { width: 5rem; padding: 0.3rem; border-radius: 4px; border: 1px solid #555; background:#222; color:#eee; }
+    .idx-input { margin-top: 2rem; }
+    input[type="number"] { width: 5rem; padding: 0.6rem; border-radius: 6px; border: 1px solid #555; background:#222; color:#eee; }
   </style>
 </head>
 <body>
@@ -20,6 +20,17 @@
   <div>
     <button class="prev" onclick="send('/prev')">上一张</button>
     <button class="next" onclick="send('/next')">下一张</button>
+  </div>
+  <div style="margin-top:1.5rem;">
+    <label for="status" style="margin-right:0.5rem;">状态选择：</label>
+    <select id="status" onchange="changeStatus()" style="padding:0.4rem 0.6rem;border-radius:6px;border:1px solid #555;background:#222;color:#eee;">
+      <option value="">状态选择</option>
+      <option value="0">闲着　:D</option>
+      <option value="1">干饭　(　o=^•ェ•)o　┏━┓</option>
+      <option value="2">睡觉　(～﹃～)~zZ</option>
+      <option value="3">干活　/(ㄒoㄒ)/~~</option>
+      <option value="4">玩　φ(゜▽゜*)♪</option>
+    </select>
   </div>
   <div class="idx-input">
     <input id="idx" type="number" min="0" step="1" placeholder="索引" />
@@ -34,6 +45,12 @@
       const v = document.getElementById('idx').value;
       if (v === '') return;
       fetch('/set?i=' + encodeURIComponent(v)).catch(() => {});
+    }
+    function changeStatus() {
+      const s = document.getElementById('status').value;
+      if (s === '') return;
+      // 不同状态对应不同图片索引，请根据自己的图片顺序调整下面的映射
+      fetch('/set?i=' + encodeURIComponent(s)).catch(() => {});
     }
   </script>
 </body>
