@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from PIL import Image
+import struct
 
 
 # 目标分辨率，根据你的屏幕分辨率修改
@@ -19,39 +20,27 @@ def rgb888_to_rgb565(r, g, b):
     return (r5 << 11) | (g6 << 5) | b5
 
 
-def image_array_name(stem: str) -> str:
-    """把文件名 stem 转成合法的 C 标识符。"""
-    result = []
-    for ch in stem:
-        if ch.isalnum():
-            result.append(ch)
-        else:
-            result.append("_")
-    return "plana_" + "".join(result) + "_Img"
+def save_image_to_bin(src_path: Path, bin_path: Path) -> None:
+    """把一张图片转换成 RGB565 原始数据，并写入 .bin 文件（行优先）。"""
+    img = Image.open(src_path).convert("RGB")
+    resample = Image.Resampling.BILINEAR  # Pillow >= 9
 
+    img = img.resize((TARGET_WIDTH, TARGET_HEIGHT), resample)
+    # Pylance 对 ImagingCore -> list 的类型推断有点挑剔，这里用列表推导兼容类型检查
+    pixels = [(int(r), int(g), int(b)) for (r, g, b) in img.getdata()]
 
-def convert_image(path: Path, array_name: str) -> list[str]:
-    """把一张图片转换成 RGB565 数组的 C 代码行。"""
-    img = Image.open(path).convert("RGB")
-    img = img.resize((TARGET_WIDTH, TARGET_HEIGHT), Image.BILINEAR)
-    pixels = list(img.getdata())
-
-    lines: list[str] = []
-    lines.append(f"const uint16_t {array_name}[] PROGMEM = {{")
-    for i, (r, g, b) in enumerate(pixels):
-        value = rgb888_to_rgb565(r, g, b)
-        if i % 12 == 0:
-            lines.append("    ")
-        lines[-1] += f"0x{value:04X}, "
-    lines.append("};")
-    lines.append("")
-    return lines
+    # 以小端序写入 16 位 RGB565，和 ESP32 内存中的 uint16_t 存一致
+    with open(bin_path, "wb") as f:
+        for r, g, b in pixels:
+            value = rgb888_to_rgb565(r, g, b)
+            f.write(struct.pack("<H", value))
 
 
 def main():
     root = Path(__file__).resolve().parents[1]
     photo_dir = root / "photo"
     out_path = root / "include" / "plana.h"
+    data_dir = root / "data"
 
     jpg_list = sorted(photo_dir.glob("*.jpg"))
     if not jpg_list:
@@ -61,6 +50,20 @@ def main():
     if len(jpg_list) > MAX_IMAGES:
         jpg_list = jpg_list[:MAX_IMAGES]
 
+    # 确保 SPIFFS 数据目录存在（PlatformIO 默认使用 data/ 上传到 SPIFFS）
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    bin_files: list[str] = []
+
+    for idx, path in enumerate(jpg_list):
+        # 统一用简单的顺序文件名，避免中文路径问题
+        bin_name = f"/img_{idx}.bin"
+        bin_path = data_dir / bin_name.lstrip("/")
+        print(f"转换图片 {path.name} -> {bin_path}")
+        save_image_to_bin(path, bin_path)
+        bin_files.append(bin_name)
+
+    # 只在头文件里保存宽高和 SPIFFS 中文件名列表
     lines: list[str] = []
     lines.append("#pragma once")
     lines.append("#include <Arduino.h>")
@@ -68,26 +71,27 @@ def main():
     lines.append(f"const uint16_t planaWidth = {TARGET_WIDTH};")
     lines.append(f"const uint16_t planaHeight = {TARGET_HEIGHT};")
     lines.append("")
-
-    array_names: list[str] = []
-
-    for path in jpg_list:
-        stem = path.stem
-        arr_name = image_array_name(stem)
-        array_names.append(arr_name)
-        lines.append(f"// 来自图片: {path.name}")
-        lines.extend(convert_image(path, arr_name))
-
-    # 指针数组 + 数量，便于在 Arduino 里轮播
-    lines.append(f"const uint16_t* const planaImages[{len(array_names)}] PROGMEM = {{")
-    for name in array_names:
-        lines.append(f"    {name},")
-    lines.append("};")
-    lines.append(f"const size_t planaImageCount = {len(array_names)};")
+    lines.append(f"const size_t planaImageCount = {len(bin_files)};")
+    lines.append("extern const char* const planaImages[];")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"生成完成: {out_path}，共 {len(array_names)} 张图片")
+
+    # 为了把字符串常量本体放在一个 .cpp 里，方便编译和链接
+    cpp_path = root / "src" / "plana_images.cpp"
+    cpp_lines: list[str] = []
+    cpp_lines.append("#include <Arduino.h>")
+    cpp_lines.append("#include \"plana.h\"")
+    cpp_lines.append("")
+    cpp_lines.append("const char* const planaImages[] = {")
+    for name in bin_files:
+        cpp_lines.append(f"    \"{name}\",")
+    cpp_lines.append("};")
+
+    cpp_path.parent.mkdir(parents=True, exist_ok=True)
+    cpp_path.write_text("\n".join(cpp_lines), encoding="utf-8")
+
+    print(f"生成完成: {out_path} 和 {cpp_path}，共 {len(bin_files)} 张图片")
 
 
 if __name__ == "__main__":
