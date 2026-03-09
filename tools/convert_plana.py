@@ -9,7 +9,8 @@ import struct
 TARGET_WIDTH = 240
 TARGET_HEIGHT = 240
 
-# 最多转换多少张图片（比如 9 = 只取前 9 张 jpg）
+# 最多转换多少张图片（比如 6 = 只取前 6 张 jpg）
+# 如果 SPIFFS 空间不足，可以再调小这个数或者把图片分辨率调低
 MAX_IMAGES = 9
 
 

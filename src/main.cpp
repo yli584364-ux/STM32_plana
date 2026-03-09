@@ -75,6 +75,11 @@ static void scanSdImages()
     if (!file.isDirectory())
     {
       String name = file.name();
+      // 确保文件名以 "/" 开头，TJpg_Decoder 示例也都是用 "/xxx.jpg"
+      if (!name.startsWith("/"))
+      {
+        name = String("/") + name;
+      }
       String lower = name;
       lower.toLowerCase();
       if (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
