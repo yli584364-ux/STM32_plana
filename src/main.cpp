@@ -349,18 +349,5 @@ void loop()
     }
   }
 
-  // 每隔 5 秒自动切换到下一张图片
-  if (now - lastSwitchTime >= 5000UL)
-  {
-    currentImageIndex++;
-    if (currentImageIndex >= imageCount)
-    {
-      currentImageIndex = 0;
-    }
-
-    showCurrentImage();
-    lastSwitchTime = now;
-  }
-
   delay(100);
 }
