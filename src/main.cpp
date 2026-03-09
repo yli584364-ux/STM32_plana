@@ -4,6 +4,9 @@
 #include <Adafruit_ST7789.h>
 #include <WiFi.h>              // WiFi AP + WebServer
 #include <WebServer.h>
+#include <FS.h>
+#include <SD.h>
+#include <TJpg_Decoder.h>
 #include "BluetoothSerial.h"  // ESP32 经典蓝牙串口
 #include "SPIFFS.h"           // SPIFFS 文件系统
 
@@ -15,6 +18,9 @@
 #define TFT_RST 4   // 屏幕 RST（如接到 EN 或固定复位，可设为 -1）
 #define TFT_BL 15   // 背光控制引脚（如果直接接 3.3V，可删掉相关代码）
 
+// SD 卡 SPI 片选引脚（SCK/MOSI/MISO 复用 VSPI: 18/23/19）
+#define SD_CS 13
+
 // 使用硬件 SPI (ESP32 VSPI: SCK=18, MOSI=23, MISO=19)
 // 如需改成 HSPI 或自定义 SPI 引脚，可以改用另一个构造函数
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
@@ -25,43 +31,119 @@ BluetoothSerial SerialBT;
 // 简单 Web 服务器
 WebServer server(80);
 
+// SD 卡相关
+static bool sdAvailable = false;
+static const uint8_t MAX_SD_IMAGES = 64;
+static String sdImageNames[MAX_SD_IMAGES];
+static size_t sdImageCount = 0;
+
+// 实际可用的图片数量（优先 SD，其次 SPIFFS）
+static size_t imageCount = 0;
+
 // 用于轮播图片的索引与定时
 static size_t currentImageIndex = 0;
 static unsigned long lastSwitchTime = 0;
 
-// 使用一行缓冲区，从 SPIFFS 中按行读取 RGB565 数据并绘制
+// TJpg_Decoder 回调：把解码出的块绘制到 TFT
+// 注意：TJpg_Decoder 的回调签名是
+// bool (*)(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap)
+static bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
+{
+  if (x >= tft.width() || y >= tft.height())
+  {
+    return false;
+  }
+  tft.drawRGBBitmap(x, y, bitmap, w, h);
+  return true;
+}
+
+// 扫描 SD 根目录中的 JPG 文件
+static void scanSdImages()
+{
+  sdImageCount = 0;
+
+  File root = SD.open("/");
+  if (!root)
+  {
+    Serial.println("Failed to open SD root");
+    return;
+  }
+
+  File file = root.openNextFile();
+  while (file && sdImageCount < MAX_SD_IMAGES)
+  {
+    if (!file.isDirectory())
+    {
+      String name = file.name();
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
+      {
+        sdImageNames[sdImageCount++] = name;
+        Serial.print("Found SD image: ");
+        Serial.println(name);
+      }
+    }
+    file = root.openNextFile();
+  }
+}
+
+// 显示当前索引图片：优先使用 SD 上的 JPG，否则回退到 SPIFFS .bin
 static void showCurrentImage()
 {
-  if (currentImageIndex >= planaImageCount)
+  if (imageCount == 0)
   {
     return;
   }
 
-  const char *path = planaImages[currentImageIndex];
-  File f = SPIFFS.open(path, "rb");
-  if (!f)
+  if (currentImageIndex >= imageCount)
   {
-    Serial.print("Failed to open image file: ");
+    currentImageIndex = 0;
+  }
+
+  if (sdAvailable && sdImageCount > 0)
+  {
+    // 使用 SD JPG，假定为 240x240
+    String path = sdImageNames[currentImageIndex % sdImageCount];
+    Serial.print("Draw JPG from SD: ");
     Serial.println(path);
-    return;
+    tft.fillScreen(ST77XX_BLACK);
+    TJpgDec.drawSdJpg(0, 0, path.c_str());
   }
-
-  static uint16_t lineBuf[240]; // 假设宽度不超过 240
-
-  tft.fillScreen(ST77XX_BLACK);
-
-  for (uint16_t y = 0; y < planaHeight; ++y)
+  else
   {
-    size_t toRead = (size_t)planaWidth * 2;
-    size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
-    if (readBytes != toRead)
+    // 使用 SPIFFS 里的 RGB565 .bin
+    if (currentImageIndex >= planaImageCount)
     {
-      break; // 数据不足，提前结束
+      currentImageIndex = 0;
     }
-    tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
-  }
 
-  f.close();
+    const char *path = planaImages[currentImageIndex];
+    File f = SPIFFS.open(path, "rb");
+    if (!f)
+    {
+      Serial.print("Failed to open image file: ");
+      Serial.println(path);
+      return;
+    }
+
+    static uint16_t lineBuf[240]; // 假设宽度不超过 240
+
+    tft.fillScreen(ST77XX_BLACK);
+
+    for (uint16_t y = 0; y < planaHeight; ++y)
+    {
+      size_t toRead = (size_t)planaWidth * 2;
+      size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
+      if (readBytes != toRead)
+      {
+        break; // 数据不足，提前结束
+      }
+      tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
+    }
+
+    f.close();
+  }
 }
 
 // Web 处理函数
@@ -91,7 +173,7 @@ static void handleRoot()
 static void handleNext()
 {
   currentImageIndex++;
-  if (currentImageIndex >= planaImageCount)
+  if (currentImageIndex >= imageCount)
   {
     currentImageIndex = 0;
   }
@@ -104,7 +186,7 @@ static void handlePrev()
 {
   if (currentImageIndex == 0)
   {
-    currentImageIndex = planaImageCount - 1;
+    currentImageIndex = (imageCount == 0 ? 0 : imageCount - 1);
   }
   else
   {
@@ -123,7 +205,7 @@ static void handleSet()
     return;
   }
   int idx = server.arg("i").toInt();
-  if (idx < 0 || (size_t)idx >= planaImageCount)
+  if (idx < 0 || (size_t)idx >= imageCount)
   {
     server.send(400, "text/plain", "out of range");
     return;
@@ -154,7 +236,37 @@ void setup()
   tft.init(240, 240);
   tft.setRotation(1); // 0~3，按需要选择显示方向
 
+  // 初始化 SD 卡并扫描 JPG 图片
+  if (SD.begin(SD_CS))
+  {
+    sdAvailable = true;
+    Serial.println("SD card initialized");
+    scanSdImages();
+  }
+  else
+  {
+    Serial.println("SD card initialization failed");
+  }
+
+  // 配置 JPEG 解码回调
+  TJpgDec.setJpgScale(1); // 不缩放，要求 JPG 本身为 240x240
+  TJpgDec.setCallback(tft_output);
+
   // 先显示第一张图片（索引 0）
+  // 决定使用 SD 还是 SPIFFS 图片
+  if (sdAvailable && sdImageCount > 0)
+  {
+    imageCount = sdImageCount;
+    Serial.print("Use images from SD, count: ");
+    Serial.println(imageCount);
+  }
+  else
+  {
+    imageCount = planaImageCount;
+    Serial.print("Use images from SPIFFS, count: ");
+    Serial.println(imageCount);
+  }
+
   showCurrentImage();
   lastSwitchTime = millis();
 
@@ -202,7 +314,7 @@ void loop()
     if (cmd == 'n' || cmd == 'N')
     {
       currentImageIndex++;
-      if (currentImageIndex >= planaImageCount)
+      if (currentImageIndex >= imageCount)
       {
         currentImageIndex = 0;
       }
@@ -212,7 +324,7 @@ void loop()
     {
       if (currentImageIndex == 0)
       {
-        currentImageIndex = planaImageCount - 1;
+        currentImageIndex = (imageCount == 0 ? 0 : imageCount - 1);
       }
       else
       {
@@ -223,7 +335,7 @@ void loop()
     else if (cmd >= '0' && cmd <= '9')
     {
       size_t idx = (size_t)(cmd - '0');
-      if (idx < planaImageCount)
+      if (idx < imageCount)
       {
         currentImageIndex = idx;
         needUpdate = true;
@@ -241,7 +353,7 @@ void loop()
   if (now - lastSwitchTime >= 5000UL)
   {
     currentImageIndex++;
-    if (currentImageIndex >= planaImageCount)
+    if (currentImageIndex >= imageCount)
     {
       currentImageIndex = 0;
     }
