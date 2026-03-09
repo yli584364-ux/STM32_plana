@@ -9,10 +9,9 @@
 #include "BluetoothSerial.h"  // ESP32 经典蓝牙串口
 #include "SPIFFS.h"           // SPIFFS 文件系统
 
-#include "plana.h"  // 由 tools/convert_plana.py 生成
+#include "BluetoothA2DPSource.h"  // ESP32 A2DP 音频源
 
-// 置为 1 时启用蓝牙 A2DP 音频测试（正弦波），置为 0 时使用原来的屏幕+Web+串口控制程序
-#define USE_A2DP_TEST 1
+#include "plana.h"  // 由 tools/convert_plana.py 生成
 
 // 根据你的实际接线修改以下引脚定义
 #define TFT_CS 5    // 屏幕 CS（片选）
@@ -45,12 +44,7 @@ static size_t imageCount = 0;
 // 用于轮播图片的索引与定时
 static size_t currentImageIndex = 0;
 static unsigned long lastSwitchTime = 0;
-
-#if USE_A2DP_TEST
-
-//================== A2DP 音频测试代码（ESP32 作为蓝牙音频发送端） ==================
-
-#include "BluetoothA2DPSource.h"
+//================== A2DP 音频（ESP32 作为蓝牙音频发送端） ==================
 
 BluetoothA2DPSource a2dpSource;
 
@@ -71,7 +65,7 @@ int32_t get_sound_data(uint8_t *data, int32_t byteCount)
     // 生成一个比较小的幅度，避免过载
     int16_t v = (int16_t)(sin(a2dpPhase) * 8000.0f);
 
-    // 立体声左右声道相同
+    // 单声道：左声道有信号，右声道静音
     samples[i] = v;     // Left
     samples[i + 1] = 0; // Right
 
@@ -84,29 +78,6 @@ int32_t get_sound_data(uint8_t *data, int32_t byteCount)
 
   return byteCount; // 告诉库我们填充了多少字节
 }
-
-void setup()
-{
-  Serial.begin(115200);
-  Serial.println("Starting ESP32 A2DP sine test...");
-
-  // 配置数据回调，然后启动 A2DP 源
-  a2dpSource.set_data_callback(get_sound_data);
-
-  // 这里的名字是 ESP32 这个“蓝牙音频发送端”的名字
-  // 你的 M38 模块 / 蓝牙音箱需要搜索并连接这个名字
-  a2dpSource.start("XWF-M18-M28-M38");
-
-  Serial.println("A2DP source started, look for 'ESP_Audio' on your headset/speaker.");
-}
-
-void loop()
-{
-  // A2DP 库在后台通过回调不断取数据，这里不需要做事
-  delay(100);
-}
-
-#else
 
 // 扫描 SD 根目录中的预处理 .bin 图片文件
 static void scanSdImages()
@@ -430,5 +401,3 @@ void loop()
 
   delay(100);
 }
-
-#endif // USE_A2DP_TEST
