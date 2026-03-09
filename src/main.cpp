@@ -69,11 +69,11 @@ int32_t get_sound_data(uint8_t *data, int32_t byteCount)
   for (int32_t i = 0; i < sampleCount; i += 2)
   {
     // 生成一个比较小的幅度，避免过载
-    int16_t v = (int16_t)(sin(a2dpPhase) * 3000.0f);
+    int16_t v = (int16_t)(sin(a2dpPhase) * 8000.0f);
 
     // 立体声左右声道相同
     samples[i] = v;     // Left
-    samples[i + 1] = v; // Right
+    samples[i + 1] = 0; // Right
 
     a2dpPhase += phaseInc;
     if (a2dpPhase > 2.0f * PI)
@@ -95,7 +95,7 @@ void setup()
 
   // 这里的名字是 ESP32 这个“蓝牙音频发送端”的名字
   // 你的 M38 模块 / 蓝牙音箱需要搜索并连接这个名字
-  a2dpSource.start("ESP_Audio");
+  a2dpSource.start("XWF-M18-M28-M38");
 
   Serial.println("A2DP source started, look for 'ESP_Audio' on your headset/speaker.");
 }
