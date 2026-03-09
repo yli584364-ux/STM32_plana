@@ -2,6 +2,8 @@
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
+#include <WiFi.h>              // WiFi AP + WebServer
+#include <WebServer.h>
 #include "BluetoothSerial.h"  // ESP32 经典蓝牙串口
 #include "SPIFFS.h"           // SPIFFS 文件系统
 
@@ -19,6 +21,9 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 
 // 蓝牙串口对象
 BluetoothSerial SerialBT;
+
+// 简单 Web 服务器
+WebServer server(80);
 
 // 用于轮播图片的索引与定时
 static size_t currentImageIndex = 0;
@@ -59,6 +64,76 @@ static void showCurrentImage()
   f.close();
 }
 
+// Web 处理函数
+static void handleRoot()
+{
+  // 尝试从 SPIFFS 读取 /index.html
+  File f = SPIFFS.open("/index.html", "r");
+  if (!f)
+  {
+    // 简单降级：如果文件不存在，就返回一个非常小的页面
+    server.send(200, "text/html; charset=utf-8",
+                "<html><body><h1>ESP LCD</h1><p>No index.html on SPIFFS</p></body></html>");
+    return;
+  }
+
+  String html;
+  html.reserve(f.size() + 64);
+  while (f.available())
+  {
+    html += (char)f.read();
+  }
+  f.close();
+
+  server.send(200, "text/html; charset=utf-8", html);
+}
+
+static void handleNext()
+{
+  currentImageIndex++;
+  if (currentImageIndex >= planaImageCount)
+  {
+    currentImageIndex = 0;
+  }
+  showCurrentImage();
+  lastSwitchTime = millis();
+  server.send(200, "text/plain", "OK");
+}
+
+static void handlePrev()
+{
+  if (currentImageIndex == 0)
+  {
+    currentImageIndex = planaImageCount - 1;
+  }
+  else
+  {
+    currentImageIndex--;
+  }
+  showCurrentImage();
+  lastSwitchTime = millis();
+  server.send(200, "text/plain", "OK");
+}
+
+static void handleSet()
+{
+  if (!server.hasArg("i"))
+  {
+    server.send(400, "text/plain", "missing i");
+    return;
+  }
+  int idx = server.arg("i").toInt();
+  if (idx < 0 || (size_t)idx >= planaImageCount)
+  {
+    server.send(400, "text/plain", "out of range");
+    return;
+  }
+  currentImageIndex = (size_t)idx;
+  showCurrentImage();
+  lastSwitchTime = millis();
+  server.send(200, "text/plain", "OK");
+}
+
 void setup()
 {
   Serial.begin(115200); // 调试串口
@@ -83,6 +158,24 @@ void setup()
   showCurrentImage();
   lastSwitchTime = millis();
 
+  // 启动 WiFi AP + WebServer
+  WiFi.mode(WIFI_AP);
+  const char *ssid = "ESP_LCD_AP";
+  const char *password = "12345678"; // 简单示例，实际可自行修改
+  WiFi.softAP(ssid, password);
+  IPAddress ip = WiFi.softAPIP();
+  Serial.print("WiFi AP SSID: ");
+  Serial.println(ssid);
+  Serial.print("AP IP address: ");
+  Serial.println(ip);
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/next", HTTP_GET, handleNext);
+  server.on("/prev", HTTP_GET, handlePrev);
+  server.on("/set", HTTP_GET, handleSet);
+  server.begin();
+  Serial.println("HTTP server started");
+
   // 启动蓝牙串口，设备名可在此修改
   SerialBT.begin("ESP_LCD");
   Serial.println("Bluetooth started, device name: ESP_LCD");
@@ -91,6 +184,9 @@ void setup()
 void loop()
 {
   unsigned long now = millis();
+
+  // 处理 HTTP 请求
+  server.handleClient();
 
   // 处理来自手机的蓝牙命令
   // 建议在手机上使用 "Serial Bluetooth Terminal" 等 APP 连接后发送字符：

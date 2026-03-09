@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ESP LCD 控制</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; padding: 20px; background: #111; color: #eee; }
+    h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+    button { font-size: 1.1rem; padding: 0.6rem 1.2rem; margin: 0.3rem; border-radius: 6px; border: none; cursor: pointer; }
+    .prev { background: #444; color: #fff; }
+    .next { background: #2979ff; color: #fff; }
+    .idx-input { margin-top: 1rem; }
+    input[type="number"] { width: 5rem; padding: 0.3rem; border-radius: 4px; border: 1px solid #555; background:#222; color:#eee; }
+  </style>
+</head>
+<body>
+  <h1>ESP LCD 图片控制</h1>
+  <p>当前设备已连接，点击按钮切换图片。</p>
+  <div>
+    <button class="prev" onclick="send('/prev')">上一张</button>
+    <button class="next" onclick="send('/next')">下一张</button>
+  </div>
+  <div class="idx-input">
+    <input id="idx" type="number" min="0" step="1" placeholder="索引" />
+    <button onclick="jump()">跳转</button>
+  </div>
+  <p style="font-size:0.9rem;opacity:0.8;">索引范围：0 ~ N-1（N 为图片数量）。</p>
+  <script>
+    function send(path) {
+      fetch(path).catch(() => {});
+    }
+    function jump() {
+      const v = document.getElementById('idx').value;
+      if (v === '') return;
+      fetch('/set?i=' + encodeURIComponent(v)).catch(() => {});
+    }
+  </script>
+</body>
+</html>
