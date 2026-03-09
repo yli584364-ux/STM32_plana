@@ -6,7 +6,6 @@
 #include <WebServer.h>
 #include <FS.h>
 #include <SD.h>
-#include <TJpg_Decoder.h>
 #include "BluetoothSerial.h"  // ESP32 经典蓝牙串口
 #include "SPIFFS.h"           // SPIFFS 文件系统
 
@@ -44,20 +43,7 @@ static size_t imageCount = 0;
 static size_t currentImageIndex = 0;
 static unsigned long lastSwitchTime = 0;
 
-// TJpg_Decoder 回调：把解码出的块绘制到 TFT
-// 注意：TJpg_Decoder 的回调签名是
-// bool (*)(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap)
-static bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
-{
-  if (x >= tft.width() || y >= tft.height())
-  {
-    return false;
-  }
-  tft.drawRGBBitmap(x, y, bitmap, w, h);
-  return true;
-}
-
-// 扫描 SD 根目录中的 JPG 文件
+// 扫描 SD 根目录中的预处理 .bin 图片文件
 static void scanSdImages()
 {
   sdImageCount = 0;
@@ -75,14 +61,15 @@ static void scanSdImages()
     if (!file.isDirectory())
     {
       String name = file.name();
-      // 确保文件名以 "/" 开头，TJpg_Decoder 示例也都是用 "/xxx.jpg"
+      // 确保文件名以 "/" 开头，统一路径格式
       if (!name.startsWith("/"))
       {
         name = String("/") + name;
       }
       String lower = name;
       lower.toLowerCase();
-      if (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
+      // 现在我们期望 SD 卡上存放的是 Python 已经转换好的 RGB565 .bin 文件
+      if (lower.endsWith(".bin"))
       {
         sdImageNames[sdImageCount++] = name;
         Serial.print("Found SD image: ");
@@ -93,7 +80,7 @@ static void scanSdImages()
   }
 }
 
-// 显示当前索引图片：优先使用 SD 上的 JPG，否则回退到 SPIFFS .bin
+// 显示当前索引图片：优先使用 SD 上的 .bin，否则回退到 SPIFFS .bin
 static void showCurrentImage()
 {
   if (imageCount == 0)
@@ -108,12 +95,35 @@ static void showCurrentImage()
 
   if (sdAvailable && sdImageCount > 0)
   {
-    // 使用 SD JPG，假定为 240x240
+    // 使用 SD 上的 RGB565 .bin 文件，格式与 SPIFFS 中生成的一致
     String path = sdImageNames[currentImageIndex % sdImageCount];
-    Serial.print("Draw JPG from SD: ");
+    Serial.print("Draw BIN from SD: ");
     Serial.println(path);
+
+    File f = SD.open(path, "rb");
+    if (!f)
+    {
+      Serial.print("Failed to open SD image file: ");
+      Serial.println(path);
+      return;
+    }
+
+    static uint16_t lineBuf[240]; // 假设宽度不超过 240
+
     tft.fillScreen(ST77XX_BLACK);
-    TJpgDec.drawSdJpg(0, 0, path.c_str());
+
+    for (uint16_t y = 0; y < planaHeight; ++y)
+    {
+      size_t toRead = (size_t)planaWidth * 2;
+      size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
+      if (readBytes != toRead)
+      {
+        break; // 数据不足，提前结束
+      }
+      tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
+    }
+
+    f.close();
   }
   else
   {
@@ -242,7 +252,10 @@ void setup()
   tft.setRotation(1); // 0~3，按需要选择显示方向
 
   // 初始化 SD 卡并扫描 JPG 图片
-  if (SD.begin(SD_CS))
+  // 显式初始化 VSPI 总线，并把 SD 频率降到 10MHz，减小总线和供电压力
+  SPI.begin(18, 19, 23, SD_CS); // SCK=18, MISO=19, MOSI=23, SS=SD_CS
+
+  if (SD.begin(SD_CS, SPI, 10000000))
   {
     sdAvailable = true;
     Serial.println("SD card initialized");
@@ -252,10 +265,6 @@ void setup()
   {
     Serial.println("SD card initialization failed");
   }
-
-  // 配置 JPEG 解码回调
-  TJpgDec.setJpgScale(1); // 不缩放，要求 JPG 本身为 240x240
-  TJpgDec.setCallback(tft_output);
 
   // 先显示第一张图片（索引 0）
   // 决定使用 SD 还是 SPIFFS 图片
