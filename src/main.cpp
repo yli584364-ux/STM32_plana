@@ -12,6 +12,7 @@
 #include "BluetoothA2DPSource.h"  // ESP32 A2DP 音频源
 
 #include "plana.h"  // 由 tools/convert_plana.py 生成
+#include "gif_frames.h"  // 由 tools/convert_gif.py 生成
 
 // 根据你的实际接线修改以下引脚定义
 #define TFT_CS 5    // 屏幕 CS（片选）
@@ -200,6 +201,44 @@ static void showCurrentImage()
   }
 }
 
+// 显示一帧 GIF（从 SPIFFS 读取 RGB565 .bin）
+static void showGifFrame(size_t frameIndex)
+{
+  if (gifFrameCount == 0)
+  {
+    Serial.println("No GIF frames to display");
+    return;
+  }
+
+  frameIndex %= gifFrameCount;
+
+  const char *path = gifFrames[frameIndex];
+  File f = SPIFFS.open(path, "rb");
+  if (!f)
+  {
+    Serial.print("Failed to open GIF frame: ");
+    Serial.println(path);
+    return;
+  }
+
+  static uint16_t lineBuf[240]; // 假设宽度不超过 240
+
+  tft.fillScreen(ST77XX_BLACK);
+
+  for (uint16_t y = 0; y < planaHeight; ++y)
+  {
+    size_t toRead = (size_t)planaWidth * 2;
+    size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
+    if (readBytes != toRead)
+    {
+      break; // 数据不足，提前结束
+    }
+    tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
+  }
+
+  f.close();
+}
+
 // Web 处理函数
 static void handleRoot()
 {
@@ -322,6 +361,31 @@ static void handlePhotoToggle()
   server.send(200, "text/plain", useSdImages ? "SD" : "FLASH");
 }
 
+// 播放一次 GIF（按顺序播放所有帧）
+static void playGifOnce()
+{
+  if (gifFrameCount == 0)
+  {
+    Serial.println("playGifOnce: gifFrameCount == 0");
+    return;
+  }
+
+  const uint16_t frameDelayMs = 80; // 每帧间隔，按效果可自行调整
+
+  for (size_t i = 0; i < gifFrameCount; ++i)
+  {
+    showGifFrame(i);
+    delay(frameDelayMs);
+  }
+}
+
+// HTTP 接口：/gif -> 播放一次 GIF
+static void handleGif()
+{
+  playGifOnce();
+  server.send(200, "text/plain", "GIF_OK");
+}
+
 void setup()
 {
   Serial.begin(115200); // 调试串口
@@ -398,6 +462,7 @@ void setup()
   server.on("/prev", HTTP_GET, handlePrev);
   server.on("/set", HTTP_GET, handleSet);
   server.on("/photo", HTTP_GET, handlePhotoToggle);
+  server.on("/gif", HTTP_GET, handleGif);
   server.begin();
   Serial.println("HTTP server started");
 
