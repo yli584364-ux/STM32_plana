@@ -11,7 +11,7 @@ TARGET_HEIGHT = 240
 
 # 最多转换多少张图片（比如 6 = 只取前 6 张 jpg）
 # 如果 SPIFFS 空间不足，可以再调小这个数或者把图片分辨率调低
-MAX_IMAGES = 6
+MAX_IMAGES = 2
 
 
 def rgb888_to_rgb565(r, g, b):

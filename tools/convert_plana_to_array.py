@@ -85,20 +85,6 @@ def main():
         print(f"转换图片 {path.name} -> {arr_path}")
         save_image_to_arr(path, arr_path)
 
-    # 只在头文件里保存宽高和 SPIFFS 中文件名列表
-    lines: list[str] = []
-    lines.append("#pragma once")
-    lines.append("#include <Arduino.h>")
-    lines.append("")
-    lines.append(f"const uint16_t planaWidth = {TARGET_WIDTH};")
-    lines.append(f"const uint16_t planaHeight = {TARGET_HEIGHT};")
-    lines.append("")
-    lines.append(f"const size_t planaImageCount = {len(bin_files)};")
-    lines.append("extern const char* const planaImages[];")
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines), encoding="utf-8")
-
     print(f"生成完成: {out_path}，共 {len(bin_files)} 张图片")
     print(f"SD 数组文件目录: {sd_arr_dir}（将其中 .arr 复制到 SD 卡根目录）")
 

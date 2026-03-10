@@ -8,7 +8,7 @@
 #include <SD.h>
 #include "BluetoothSerial.h"  // ESP32 经典蓝牙串口
 #include "SPIFFS.h"           // SPIFFS 文件系统
-
+#include <stdlib.h>
 #include "BluetoothA2DPSource.h"  // ESP32 A2DP 音频源
 
 #include "plana.h"  // 由 tools/convert_plana.py 生成
@@ -20,7 +20,7 @@
 #define TFT_BL 15   // 背光控制引脚（如果直接接 3.3V，可删掉相关代码）
 
 // SD 卡 SPI 片选引脚（SCK/MOSI/MISO 复用 VSPI: 18/23/19）
-#define SD_CS 13
+#define SD_CS 22
 
 // 使用硬件 SPI (ESP32 VSPI: SCK=18, MOSI=23, MISO=19)
 // 如需改成 HSPI 或自定义 SPI 引脚，可以改用另一个构造函数
@@ -452,6 +452,9 @@ static void handleRoot()
   if (!f)
   {
     // 简单降级：如果文件不存在，就返回一个非常小的页面
+    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
     server.send(200, "text/html; charset=utf-8",
                 "<html><body><h1>ESP LCD</h1><p>No index.html on SPIFFS</p></body></html>");
     return;
@@ -464,7 +467,10 @@ static void handleRoot()
     html += (char)f.read();
   }
   f.close();
-
+  // 禁止浏览器缓存页面，确保修改 data/index.html 后手机能立刻看到新内容
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
   server.send(200, "text/html; charset=utf-8", html);
 }
 
