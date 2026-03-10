@@ -80,16 +80,10 @@ def main():
     bin_files: list[str] = []
 
     for idx, path in enumerate(jpg_list):
-        # 统一用简单的顺序文件名，避免中文路径问题
-        bin_name = f"/img_{idx}.bin"
-        bin_path = data_dir / bin_name.lstrip("/")
         arr_name = f"img_{idx}.arr"
         arr_path = sd_arr_dir / arr_name
-        print(f"转换图片 {path.name} -> {bin_path}")
-        save_image_to_bin(path, bin_path)
         print(f"转换图片 {path.name} -> {arr_path}")
         save_image_to_arr(path, arr_path)
-        bin_files.append(bin_name)
 
     # 只在头文件里保存宽高和 SPIFFS 中文件名列表
     lines: list[str] = []
@@ -105,21 +99,7 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
-    # 为了把字符串常量本体放在一个 .cpp 里，方便编译和链接
-    cpp_path = root / "src" / "plana_images.cpp"
-    cpp_lines: list[str] = []
-    cpp_lines.append("#include <Arduino.h>")
-    cpp_lines.append("#include \"plana.h\"")
-    cpp_lines.append("")
-    cpp_lines.append("const char* const planaImages[] = {")
-    for name in bin_files:
-        cpp_lines.append(f"    \"{name}\",")
-    cpp_lines.append("};")
-
-    cpp_path.parent.mkdir(parents=True, exist_ok=True)
-    cpp_path.write_text("\n".join(cpp_lines), encoding="utf-8")
-
-    print(f"生成完成: {out_path} 和 {cpp_path}，共 {len(bin_files)} 张图片")
+    print(f"生成完成: {out_path}，共 {len(bin_files)} 张图片")
     print(f"SD 数组文件目录: {sd_arr_dir}（将其中 .arr 复制到 SD 卡根目录）")
 
 

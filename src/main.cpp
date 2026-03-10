@@ -63,6 +63,108 @@ static bool useSdGifMode = false;
 // 用于轮播图片的索引与定时
 static size_t currentImageIndex = 0;
 static unsigned long lastSwitchTime = 0;
+
+// 从数组文本 .arr 中解析下一个像素值（支持 0x1234 或十进制）
+static bool readNextArrayValue(File &f, uint16_t &out)
+{
+  char token[16];
+  size_t len = 0;
+  bool inToken = false;
+
+  while (f.available())
+  {
+    char c = (char)f.read();
+    bool isTokenChar = ((c >= '0' && c <= '9') ||
+                        (c >= 'a' && c <= 'f') ||
+                        (c >= 'A' && c <= 'F') ||
+                        c == 'x' || c == 'X');
+
+    if (isTokenChar)
+    {
+      if (len < sizeof(token) - 1)
+      {
+        token[len++] = c;
+      }
+      inToken = true;
+    }
+    else if (inToken)
+    {
+      break;
+    }
+  }
+
+  if (!inToken)
+  {
+    return false;
+  }
+
+  token[len] = '\0';
+  out = (uint16_t)(strtoul(token, nullptr, 0) & 0xFFFFUL);
+  return true;
+}
+
+// 从 .arr 文件按块（10 行）读取并绘制整张图片
+static bool drawArrImageFromFile(File &f)
+{
+  const uint16_t chunkRows = 10;
+  const size_t totalPixels = (size_t)planaWidth * (size_t)planaHeight;
+  const size_t chunkPixels = (size_t)planaWidth * (size_t)chunkRows;
+
+  uint16_t *chunkBuf = (uint16_t *)malloc(chunkPixels * sizeof(uint16_t));
+  if (!chunkBuf)
+  {
+    Serial.println("SD image: chunk buffer malloc failed");
+    return false;
+  }
+
+  bool parseOk = true;
+  size_t parsedCount = 0;
+  uint16_t y = 0;
+
+  tft.fillScreen(ST77XX_BLACK);
+
+  while (y < planaHeight && parseOk)
+  {
+    uint16_t rowsThisChunk = (uint16_t)(planaHeight - y);
+    if (rowsThisChunk > chunkRows)
+    {
+      rowsThisChunk = chunkRows;
+    }
+
+    size_t pixelsThisChunk = (size_t)planaWidth * (size_t)rowsThisChunk;
+
+    for (size_t i = 0; i < pixelsThisChunk; ++i)
+    {
+      if (!readNextArrayValue(f, chunkBuf[i]))
+      {
+        parseOk = false;
+        break;
+      }
+      parsedCount++;
+    }
+
+    if (!parseOk)
+    {
+      break;
+    }
+
+    tft.drawRGBBitmap(0, y, chunkBuf, planaWidth, rowsThisChunk);
+    y = (uint16_t)(y + rowsThisChunk);
+  }
+
+  free(chunkBuf);
+
+  if (!parseOk || parsedCount != totalPixels)
+  {
+    Serial.print("SD image: array value count mismatch, parsed=");
+    Serial.print(parsedCount);
+    Serial.print(", expected=");
+    Serial.println(totalPixels);
+    return false;
+  }
+
+  return true;
+}
 //================== A2DP 音频（ESP32 作为蓝牙音频发送端） ==================
 
 BluetoothA2DPSource a2dpSource;
@@ -98,7 +200,7 @@ int32_t get_sound_data(uint8_t *data, int32_t byteCount)
   return byteCount; // 告诉库我们填充了多少字节
 }
 
-// 扫描 SD 根目录中的预处理 .bin 图片文件
+// 扫描 SD 根目录中的预处理 .arr 图片文件
 static void scanSdImages()
 {
   sdImageCount = 0;
@@ -123,8 +225,8 @@ static void scanSdImages()
       }
       String lower = name;
       lower.toLowerCase();
-      // 现在我们期望 SD 卡上存放的是 Python 已经转换好的 RGB565 .bin 文件
-      if (lower.endsWith(".bin"))
+      // 现在我们期望 SD 卡上存放的是 Python 已经转换好的 RGB565 数组文本 .arr 文件
+      if (lower.endsWith(".arr"))
       {
         sdImageNames[sdImageCount++] = name;
         Serial.print("Found SD image: ");
@@ -205,34 +307,22 @@ static void showCurrentImage()
 
   if (useSdImages && sdAvailable && sdImageCount > 0)
   {
-    // 使用 SD 上的 RGB565 .bin 文件，格式与 SPIFFS 中生成的一致
+    // 使用 SD 上的 RGB565 数组文本 .arr 文件
     String path = sdImageNames[currentImageIndex % sdImageCount];
-    Serial.print("Draw BIN from SD: ");
+    Serial.print("Draw ARR from SD: ");
     Serial.println(path);
 
-    File f = SD.open(path, "rb");
+    File f = SD.open(path, "r");
     if (!f)
     {
       Serial.print("Failed to open SD image file: ");
       Serial.println(path);
       return;
     }
-
-    static uint16_t lineBuf[240]; // 假设宽度不超过 240
-
-    tft.fillScreen(ST77XX_BLACK);
-
-    for (uint16_t y = 0; y < planaHeight; ++y)
+    if (!drawArrImageFromFile(f))
     {
-      size_t toRead = (size_t)planaWidth * 2;
-      size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
-      if (readBytes != toRead)
-      {
-        break; // 数据不足，提前结束
-      }
-      tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
+      Serial.println("Failed to draw SD ARR image");
     }
-
     f.close();
   }
   else
@@ -271,9 +361,9 @@ static void showCurrentImage()
   }
 }
 
-// ======== GIF 播放（从 SD 卡目录读取 .bin 帧） ========
+// ======== GIF 播放（从 SD 卡目录读取 .arr 帧） ========
 
-// 从指定 SD 目录加载 GIF 帧文件列表
+// 从指定 SD 目录加载 GIF 帧文件列表（.arr）
 static size_t loadGifFramesFromSdFolder(const char *folder)
 {
   gifFrameSdCount = 0;
@@ -300,7 +390,7 @@ static size_t loadGifFramesFromSdFolder(const char *folder)
       String name = file.name();
       String lower = name;
       lower.toLowerCase();
-      if (lower.endsWith(".bin"))
+      if (lower.endsWith(".arr"))
       {
         // 确保路径以 "/" 开头，兼容不同返回形式
         if (!name.startsWith("/"))
@@ -335,10 +425,10 @@ static size_t loadGifFramesFromSdFolder(const char *folder)
   return gifFrameSdCount;
 }
 
-// 显示一帧 GIF（从 SD 读取 RGB565 .bin）
+// 显示一帧 GIF（从 SD 读取 RGB565 数组 .arr）
 static void showGifFrameFromSd(const String &path)
 {
-  File f = SD.open(path.c_str(), "rb");
+  File f = SD.open(path.c_str(), "r");
   if (!f)
   {
     Serial.print("Failed to open GIF frame from SD: ");
@@ -346,19 +436,9 @@ static void showGifFrameFromSd(const String &path)
     return;
   }
 
-  static uint16_t lineBuf[240]; // 假设宽度不超过 240
-
-  tft.fillScreen(ST77XX_BLACK);
-
-  for (uint16_t y = 0; y < planaHeight; ++y)
+  if (!drawArrImageFromFile(f))
   {
-    size_t toRead = (size_t)planaWidth * 2;
-    size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
-    if (readBytes != toRead)
-    {
-      break; // 数据不足，提前结束
-    }
-    tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
+    Serial.println("Failed to draw GIF ARR frame from SD");
   }
 
   f.close();
@@ -485,6 +565,7 @@ static void handlePhotoToggle()
   {
     // 只有 SPIFFS 或都没有 SD，则维持当前模式
     server.send(200, "text/plain", "NO_SD");
+    Serial.println("SD_ERROR");
     return;
   }
 
@@ -581,6 +662,7 @@ static void handleSdModeToggle()
   if (!sdAvailable)
   {
     server.send(200, "text/plain", "NO_SD");
+    Serial.println("SD_ERROR");
     return;
   }
 
