@@ -41,6 +41,9 @@ static size_t sdImageCount = 0;
 // 实际可用的图片数量（优先 SD，其次 SPIFFS）
 static size_t imageCount = 0;
 
+// 当前是否使用 SD 卡图片（false = SPIFFS/Flash，true = SD 卡）
+static bool useSdImages = false;
+
 // 用于轮播图片的索引与定时
 static size_t currentImageIndex = 0;
 static unsigned long lastSwitchTime = 0;
@@ -67,7 +70,7 @@ int32_t get_sound_data(uint8_t *data, int32_t byteCount)
 
     // 单声道：左声道有信号，右声道静音
     samples[i] = v;     // Left
-    samples[i + 1] = 0; // Right
+    samples[i + 1] = v; // Right
 
     a2dpPhase += phaseInc;
     if (a2dpPhase > 2.0f * PI)
@@ -116,7 +119,7 @@ static void scanSdImages()
   }
 }
 
-// 显示当前索引图片：优先使用 SD 上的 .bin，否则回退到 SPIFFS .bin
+// 显示当前索引图片：根据 useSdImages 在 SD 与 SPIFFS 之间切换
 static void showCurrentImage()
 {
   if (imageCount == 0)
@@ -129,7 +132,7 @@ static void showCurrentImage()
     currentImageIndex = 0;
   }
 
-  if (sdAvailable && sdImageCount > 0)
+  if (useSdImages && sdAvailable && sdImageCount > 0)
   {
     // 使用 SD 上的 RGB565 .bin 文件，格式与 SPIFFS 中生成的一致
     String path = sdImageNames[currentImageIndex % sdImageCount];
@@ -164,12 +167,12 @@ static void showCurrentImage()
   else
   {
     // 使用 SPIFFS 里的 RGB565 .bin
-    if (currentImageIndex >= planaImageCount)
+    if (planaImageCount == 0)
     {
-      currentImageIndex = 0;
+      return;
     }
 
-    const char *path = planaImages[currentImageIndex];
+    const char *path = planaImages[currentImageIndex % planaImageCount];
     File f = SPIFFS.open(path, "rb");
     if (!f)
     {
@@ -267,6 +270,58 @@ static void handleSet()
   server.send(200, "text/plain", "OK");
 }
 
+// 切换图片来源：在 SPIFFS(Flash) 与 SD 卡图片之间互相切换
+static void handlePhotoToggle()
+{
+  // 如果两边都没有图片，就直接返回
+  if (!sdAvailable || sdImageCount == 0)
+  {
+    // 只有 SPIFFS 或都没有 SD，则维持当前模式
+    server.send(200, "text/plain", "NO_SD");
+    return;
+  }
+
+  if (planaImageCount == 0)
+  {
+    // 没有 SPIFFS 图片，只能使用 SD
+    useSdImages = true;
+    imageCount = sdImageCount;
+    currentImageIndex %= imageCount;
+    showCurrentImage();
+    lastSwitchTime = millis();
+    server.send(200, "text/plain", "SD_ONLY");
+    return;
+  }
+
+  // 两边都有图片时在 Flash(SPIFFS) / SD 间来回切换
+  useSdImages = !useSdImages;
+  if (useSdImages)
+  {
+    imageCount = sdImageCount;
+    Serial.println("Switch to SD images");
+  }
+  else
+  {
+    imageCount = planaImageCount;
+    Serial.println("Switch to SPIFFS images");
+  }
+
+  if (imageCount == 0)
+  {
+    server.send(200, "text/plain", "NO_IMG");
+    return;
+  }
+
+  if (currentImageIndex >= imageCount)
+  {
+    currentImageIndex = 0;
+  }
+
+  showCurrentImage();
+  lastSwitchTime = millis();
+  server.send(200, "text/plain", useSdImages ? "SD" : "FLASH");
+}
+
 void setup()
 {
   Serial.begin(115200); // 调试串口
@@ -303,18 +358,25 @@ void setup()
   }
 
   // 先显示第一张图片（索引 0）
-  // 决定使用 SD 还是 SPIFFS 图片
-  if (sdAvailable && sdImageCount > 0)
+  // 默认从 SPIFFS(Flash) 显示，如果没有 SPIFFS 图片则退回到 SD
+  if (planaImageCount > 0)
   {
+    useSdImages = false;
+    imageCount = planaImageCount;
+    Serial.print("Use images from SPIFFS (Flash), count: ");
+    Serial.println(imageCount);
+  }
+  else if (sdAvailable && sdImageCount > 0)
+  {
+    useSdImages = true;
     imageCount = sdImageCount;
     Serial.print("Use images from SD, count: ");
     Serial.println(imageCount);
   }
   else
   {
-    imageCount = planaImageCount;
-    Serial.print("Use images from SPIFFS, count: ");
-    Serial.println(imageCount);
+    imageCount = 0;
+    Serial.println("No images found on SPIFFS or SD");
   }
 
   showCurrentImage();
@@ -335,6 +397,7 @@ void setup()
   server.on("/next", HTTP_GET, handleNext);
   server.on("/prev", HTTP_GET, handlePrev);
   server.on("/set", HTTP_GET, handleSet);
+    server.on("/photo", HTTP_GET, handlePhotoToggle);
   server.begin();
   Serial.println("HTTP server started");
 

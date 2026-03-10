@@ -11,6 +11,9 @@
     .prev { background: #444; color: #fff; }
     .next { background: #2979ff; color: #fff; }
     .idx-input { margin-top: 2rem; }
+    .Photo_state_change { color: #eee; }
+    .Photo_state_change.photo-flash { background: #555; }
+    .Photo_state_change.photo-sd { background: #2e7d32; }
     input[type="number"] { width: 5rem; padding: 0.6rem; border-radius: 6px; border: 1px solid #555; background:#222; color:#eee; }
   </style>
 </head>
@@ -32,6 +35,9 @@
       <option value="4">玩　φ(゜▽゜*)♪</option>
     </select>
   </div>
+  <div style="margin-top:1.5rem;">
+    <button id="photoToggleBtn" class="Photo_state_change photo-flash" onclick="togglePhotoMode()">Flash照片显示</button>
+  </div>
   <div class="idx-input">
     <input id="idx" type="number" min="0" step="1" placeholder="索引" />
     <button onclick="jump()">跳转</button>
@@ -40,6 +46,26 @@
   <script>
     function send(path) {
       fetch(path).catch(() => {});
+    }
+    function togglePhotoMode() {
+      // 通知设备切换照片来源
+      send('/photo');
+
+      const btn = document.getElementById('photoToggleBtn');
+      if (!btn) return;
+
+      const isFlash = btn.classList.contains('photo-flash');
+      if (isFlash) {
+        // 当前是 Flash -> 切到 SD 显示
+        btn.textContent = 'SD卡图片显示';
+        btn.classList.remove('photo-flash');
+        btn.classList.add('photo-sd');
+      } else {
+        // 当前是 SD -> 切回 Flash 显示
+        btn.textContent = 'Flash照片显示';
+        btn.classList.remove('photo-sd');
+        btn.classList.add('photo-flash');
+      }
     }
     function jump() {
       const v = document.getElementById('idx').value;
