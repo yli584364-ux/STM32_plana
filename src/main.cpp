@@ -460,18 +460,50 @@ static void handleRoot()
     return;
   }
 
-  String html;
-  html.reserve(f.size() + 64);
-  while (f.available())
-  {
-    html += (char)f.read();
-  }
-  f.close();
+  size_t fileSize = (size_t)f.size();
+  Serial.print("Serving /index.html, size=");
+  Serial.println(fileSize);
+
   // 禁止浏览器缓存页面，确保修改 data/index.html 后手机能立刻看到新内容
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "-1");
-  server.send(200, "text/html; charset=utf-8", html);
+  // 强制短连接并分块发送，避免某些手机在 keep-alive 下出现 write() 失败
+  server.sendHeader("Connection", "close");
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html; charset=utf-8", "");
+
+  uint8_t buf[512];
+  size_t totalSent = 0;
+  while (f.available())
+  {
+    size_t n = f.read(buf, sizeof(buf));
+    if (n == 0)
+    {
+      break;
+    }
+
+    size_t w = server.client().write(buf, n);
+    if (w == 0)
+    {
+      Serial.println("/index.html write failed while chunk sending");
+      break;
+    }
+
+    totalSent += w;
+    if (w < n)
+    {
+      Serial.println("/index.html partial chunk write");
+      break;
+    }
+    delay(1); // 让出时间片，降低 WiFi 发送阻塞概率
+  }
+
+  f.close();
+  server.sendContent(""); // 结束 chunked 发送
+
+  Serial.print("/index.html sent bytes=");
+  Serial.println(totalSent);
 }
 
 // 播放一次 GIF（从指定 SD 目录按顺序播放所有帧）
