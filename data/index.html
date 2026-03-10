@@ -38,6 +38,9 @@
   <div style="margin-top:1.5rem;">
     <button id="photoToggleBtn" class="Photo_state_change photo-flash" onclick="togglePhotoMode()">Flash照片显示</button>
   </div>
+  <div style="margin-top:1rem;">
+    <button id="sdModeBtn" class="Photo_state_change" onclick="toggleSdGifMode()" style="background:#5a3cb5;color:#fff;">SD 图片模式</button>
+  </div>
   <div class="idx-input">
     <input id="idx" type="number" min="0" step="1" placeholder="索引" />
     <button onclick="jump()">跳转</button>
@@ -46,7 +49,9 @@
   <script>
     function send(path) {
       fetch(path).catch(() => {});
-    }// 切换照片来源（Flash <-> SD）
+    }
+
+    // 切换照片来源（Flash <-> SD）
     function togglePhotoMode() {
       // 通知设备切换照片来源
       send('/photo');
@@ -66,6 +71,22 @@
         btn.classList.remove('photo-sd');
         btn.classList.add('photo-flash');
       }
+    }
+
+    // 切换 SD 卡普通图片模式 / SD 卡 GIF 模式
+    function toggleSdGifMode() {
+      fetch('/sdmode')
+        .then(r => r.text())
+        .then(t => {
+          const btn = document.getElementById('sdModeBtn');
+          if (!btn) return;
+          if (t.trim() === 'GIF') {
+            btn.textContent = 'SD GIF 模式';
+          } else {
+            btn.textContent = 'SD 图片模式';
+          }
+        })
+        .catch(() => {});
     }
     function jump() {
       const v = document.getElementById('idx').value;// 索引不能为空

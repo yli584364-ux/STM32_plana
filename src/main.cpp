@@ -12,7 +12,6 @@
 #include "BluetoothA2DPSource.h"  // ESP32 A2DP 音频源
 
 #include "plana.h"  // 由 tools/convert_plana.py 生成
-#include "gif_frames.h"  // 由 tools/convert_gif.py 生成
 
 // 根据你的实际接线修改以下引脚定义
 #define TFT_CS 5    // 屏幕 CS（片选）
@@ -39,11 +38,27 @@ static const uint8_t MAX_SD_IMAGES = 64;
 static String sdImageNames[MAX_SD_IMAGES];
 static size_t sdImageCount = 0;
 
-// 实际可用的图片数量（优先 SD，其次 SPIFFS）
+// GIF 播放用：从 SD 卡目录加载帧列表（单个 GIF 的帧）
+static const uint8_t MAX_GIF_FRAMES = 80;
+static String gifFrameSdNames[MAX_GIF_FRAMES];
+static size_t gifFrameSdCount = 0;
+
+// 多个 GIF 集合：gif_1、gif_2 等目录列表
+static const uint8_t MAX_GIF_SETS = 16;
+static String gifSetFolders[MAX_GIF_SETS];
+static size_t gifSetCount = 0;
+
+// 实际可用的图片数量（优先 SD，其次 SPIFFS）。
+// 在 "普通图片模式" 下：表示当前模式下图片数量；
+// 在 "SD GIF 模式" 下且使用 SD 时：表示可选 GIF 集合数量。
 static size_t imageCount = 0;
 
 // 当前是否使用 SD 卡图片（false = SPIFFS/Flash，true = SD 卡）
 static bool useSdImages = false;
+
+// 当前 SD 模式：false = 播放 SD 上单张图片（sdImageNames）
+//              true  = 播放 SD 上 GIF（gif_1、gif_2 ...）
+static bool useSdGifMode = false;
 
 // 用于轮播图片的索引与定时
 static size_t currentImageIndex = 0;
@@ -118,6 +133,61 @@ static void scanSdImages()
     }
     file = root.openNextFile();
   }
+}
+
+// 扫描 SD 根目录中的 gif_X 目录，作为可选 GIF 集合
+static void scanGifSetsOnSd()
+{
+  gifSetCount = 0;
+
+  if (!sdAvailable)
+  {
+    return;
+  }
+
+  File root = SD.open("/");
+  if (!root)
+  {
+    Serial.println("Failed to open SD root when scanning GIF sets");
+    return;
+  }
+
+  File file = root.openNextFile();
+  while (file && gifSetCount < MAX_GIF_SETS)
+  {
+    if (file.isDirectory())
+    {
+      String name = file.name();
+      if (!name.startsWith("/"))
+      {
+        name = String("/") + name;
+      }
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.startsWith("/gif_"))
+      {
+        gifSetFolders[gifSetCount++] = name;
+      }
+    }
+    file = root.openNextFile();
+  }
+
+  // 按目录名字排序，确保 gif_1, gif_2 ... 顺序
+  for (size_t i = 0; i + 1 < gifSetCount; ++i)
+  {
+    for (size_t j = i + 1; j < gifSetCount; ++j)
+    {
+      if (gifSetFolders[j] < gifSetFolders[i])
+      {
+        String tmp = gifSetFolders[i];
+        gifSetFolders[i] = gifSetFolders[j];
+        gifSetFolders[j] = tmp;
+      }
+    }
+  }
+
+  Serial.print("GIF sets on SD: ");
+  Serial.println(gifSetCount);
 }
 
 // 显示当前索引图片：根据 useSdImages 在 SD 与 SPIFFS 之间切换
@@ -201,22 +271,77 @@ static void showCurrentImage()
   }
 }
 
-// 显示一帧 GIF（从 SPIFFS 读取 RGB565 .bin）
-static void showGifFrame(size_t frameIndex)
+// ======== GIF 播放（从 SD 卡目录读取 .bin 帧） ========
+
+// 从指定 SD 目录加载 GIF 帧文件列表
+static size_t loadGifFramesFromSdFolder(const char *folder)
 {
-  if (gifFrameCount == 0)
+  gifFrameSdCount = 0;
+
+  if (!sdAvailable)
   {
-    Serial.println("No GIF frames to display");
-    return;
+    Serial.println("GIF: SD not available");
+    return 0;
   }
 
-  frameIndex %= gifFrameCount;
+  File dir = SD.open(folder);
+  if (!dir || !dir.isDirectory())
+  {
+    Serial.print("GIF: not a directory: ");
+    Serial.println(folder);
+    return 0;
+  }
 
-  const char *path = gifFrames[frameIndex];
-  File f = SPIFFS.open(path, "rb");
+  File file = dir.openNextFile();
+  while (file && gifFrameSdCount < MAX_GIF_FRAMES)
+  {
+    if (!file.isDirectory())
+    {
+      String name = file.name();
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.endsWith(".bin"))
+      {
+        // 确保路径以 "/" 开头，兼容不同返回形式
+        if (!name.startsWith("/"))
+        {
+          name = String("/") + name;
+        }
+        gifFrameSdNames[gifFrameSdCount++] = name;
+      }
+    }
+    file = dir.openNextFile();
+  }
+
+  // 简单按文件名排序，要求帧文件按名字顺序排列
+  for (size_t i = 0; i + 1 < gifFrameSdCount; ++i)
+  {
+    for (size_t j = i + 1; j < gifFrameSdCount; ++j)
+    {
+      if (gifFrameSdNames[j] < gifFrameSdNames[i])
+      {
+        String tmp = gifFrameSdNames[i];
+        gifFrameSdNames[i] = gifFrameSdNames[j];
+        gifFrameSdNames[j] = tmp;
+      }
+    }
+  }
+
+  Serial.print("GIF: loaded ");
+  Serial.print(gifFrameSdCount);
+  Serial.print(" frames from ");
+  Serial.println(folder);
+
+  return gifFrameSdCount;
+}
+
+// 显示一帧 GIF（从 SD 读取 RGB565 .bin）
+static void showGifFrameFromSd(const String &path)
+{
+  File f = SD.open(path.c_str(), "rb");
   if (!f)
   {
-    Serial.print("Failed to open GIF frame: ");
+    Serial.print("Failed to open GIF frame from SD: ");
     Serial.println(path);
     return;
   }
@@ -263,6 +388,25 @@ static void handleRoot()
   server.send(200, "text/html; charset=utf-8", html);
 }
 
+// 播放一次 GIF（从指定 SD 目录按顺序播放所有帧）
+static void playGifFromSdFolder(const char *folder)
+{
+  size_t count = loadGifFramesFromSdFolder(folder);
+  if (count == 0)
+  {
+    Serial.println("playGifFromSdFolder: no frames");
+    return;
+  }
+
+  const uint16_t frameDelayMs = 80; // 每帧间隔，按效果可自行调整
+
+  for (size_t i = 0; i < count; ++i)
+  {
+    showGifFrameFromSd(gifFrameSdNames[i]);
+    delay(frameDelayMs);
+  }
+}
+
 static void handleNext()
 {
   currentImageIndex++;
@@ -270,7 +414,15 @@ static void handleNext()
   {
     currentImageIndex = 0;
   }
-  showCurrentImage();
+  if (useSdImages && useSdGifMode && gifSetCount > 0)
+  {
+    size_t idx = currentImageIndex % gifSetCount;
+    playGifFromSdFolder(gifSetFolders[idx].c_str());
+  }
+  else
+  {
+    showCurrentImage();
+  }
   lastSwitchTime = millis();
   server.send(200, "text/plain", "OK");
 }
@@ -285,7 +437,15 @@ static void handlePrev()
   {
     currentImageIndex--;
   }
-  showCurrentImage();
+  if (useSdImages && useSdGifMode && gifSetCount > 0)
+  {
+    size_t idx = currentImageIndex % gifSetCount;
+    playGifFromSdFolder(gifSetFolders[idx].c_str());
+  }
+  else
+  {
+    showCurrentImage();
+  }
   lastSwitchTime = millis();
   server.send(200, "text/plain", "OK");
 }
@@ -304,7 +464,15 @@ static void handleSet()
     return;
   }
   currentImageIndex = (size_t)idx;
-  showCurrentImage();
+  if (useSdImages && useSdGifMode && gifSetCount > 0)
+  {
+    size_t gifIdx = currentImageIndex % gifSetCount;
+    playGifFromSdFolder(gifSetFolders[gifIdx].c_str());
+  }
+  else
+  {
+    showCurrentImage();
+  }
   lastSwitchTime = millis();
   server.send(200, "text/plain", "OK");
 }
@@ -336,8 +504,20 @@ static void handlePhotoToggle()
   useSdImages = !useSdImages;
   if (useSdImages)
   {
-    imageCount = sdImageCount;
-    Serial.println("Switch to SD images");
+    if (useSdGifMode)
+    {
+      if (gifSetCount == 0)
+      {
+        scanGifSetsOnSd();
+      }
+      imageCount = gifSetCount;
+      Serial.println("Switch to SD GIF mode");
+    }
+    else
+    {
+      imageCount = sdImageCount;
+      Serial.println("Switch to SD images");
+    }
   }
   else
   {
@@ -361,29 +541,70 @@ static void handlePhotoToggle()
   server.send(200, "text/plain", useSdImages ? "SD" : "FLASH");
 }
 
-// 播放一次 GIF（按顺序播放所有帧）
-static void playGifOnce()
+// HTTP 接口：/gif -> 从 SD 卡 gif_X 目录播放一次 GIF
+static void handleGif()
 {
-  if (gifFrameCount == 0)
+  if (gifSetCount == 0)
   {
-    Serial.println("playGifOnce: gifFrameCount == 0");
+    scanGifSetsOnSd();
+  }
+
+  if (gifSetCount == 0)
+  {
+    server.send(200, "text/plain", "NO_GIF_SET");
     return;
   }
 
-  const uint16_t frameDelayMs = 80; // 每帧间隔，按效果可自行调整
+  size_t idx = 0;
 
-  for (size_t i = 0; i < gifFrameCount; ++i)
+  // 可选参数：/gif?id=1 -> 选择第 1 个 GIF 集合（从 1 开始更加直观）
+  if (server.hasArg("id"))
   {
-    showGifFrame(i);
-    delay(frameDelayMs);
+    int id = server.arg("id").toInt();
+    if (id > 0)
+    {
+      idx = (size_t)(id - 1);
+      if (idx >= gifSetCount)
+      {
+        idx = gifSetCount - 1;
+      }
+    }
   }
+
+  playGifFromSdFolder(gifSetFolders[idx].c_str());
+  server.send(200, "text/plain", "GIF_OK");
 }
 
-// HTTP 接口：/gif -> 播放一次 GIF
-static void handleGif()
+// HTTP 接口：/sdmode -> 切换 SD 普通图片 / SD GIF 模式
+static void handleSdModeToggle()
 {
-  playGifOnce();
-  server.send(200, "text/plain", "GIF_OK");
+  if (!sdAvailable)
+  {
+    server.send(200, "text/plain", "NO_SD");
+    return;
+  }
+
+  useSdGifMode = !useSdGifMode;
+
+  if (useSdImages)
+  {
+    if (useSdGifMode)
+    {
+      if (gifSetCount == 0)
+      {
+        scanGifSetsOnSd();
+      }
+      imageCount = gifSetCount;
+      Serial.println("Now in SD GIF mode");
+    }
+    else
+    {
+      imageCount = sdImageCount;
+      Serial.println("Now in SD still-image mode");
+    }
+  }
+
+  server.send(200, "text/plain", useSdGifMode ? "GIF" : "IMAGE");
 }
 
 void setup()
@@ -463,6 +684,7 @@ void setup()
   server.on("/set", HTTP_GET, handleSet);
   server.on("/photo", HTTP_GET, handlePhotoToggle);
   server.on("/gif", HTTP_GET, handleGif);
+  server.on("/sdmode", HTTP_GET, handleSdModeToggle);
   server.begin();
   Serial.println("HTTP server started");
 
