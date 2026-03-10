@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ESP LCD 控制</title>
   <style>
-    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; padding: 20px; background: #111; color: #eee; }
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; padding: 20px; background: linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('background.jpg'); background-size: cover; background-position: center; color: #eee; }
     h1 { font-size: 1.5rem; margin-bottom: 1rem; }
     button { font-size: 1.1rem; padding: 0.6rem 1.2rem; margin: 0.3rem; border-radius: 6px; border: none; cursor: pointer; }
     .prev { background: #444; color: #fff; }
@@ -46,7 +46,7 @@
   <script>
     function send(path) {
       fetch(path).catch(() => {});
-    }
+    }// 切换照片来源（Flash <-> SD）
     function togglePhotoMode() {
       // 通知设备切换照片来源
       send('/photo');
@@ -68,9 +68,9 @@
       }
     }
     function jump() {
-      const v = document.getElementById('idx').value;
-      if (v === '') return;
-      fetch('/set?i=' + encodeURIComponent(v)).catch(() => {});
+      const v = document.getElementById('idx').value;// 索引不能为空
+      if (v === '') return;// 索引不能为空
+      fetch('/set?i=' + encodeURIComponent(v)).catch(() => {});// 发送跳转请求
     }
     function changeStatus() {
       const s = document.getElementById('status').value;

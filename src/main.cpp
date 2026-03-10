@@ -397,7 +397,7 @@ void setup()
   server.on("/next", HTTP_GET, handleNext);
   server.on("/prev", HTTP_GET, handlePrev);
   server.on("/set", HTTP_GET, handleSet);
-    server.on("/photo", HTTP_GET, handlePhotoToggle);
+  server.on("/photo", HTTP_GET, handlePhotoToggle);
   server.begin();
   Serial.println("HTTP server started");
 

@@ -8,7 +8,4 @@ const char* const planaImages[] = {
     "/img_3.bin",
     "/img_4.bin",
     "/img_5.bin",
-    "/img_6.bin",
-    "/img_7.bin",
-    "/img_8.bin",
 };
