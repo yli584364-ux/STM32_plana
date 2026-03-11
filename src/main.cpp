@@ -6,10 +6,17 @@
 #include <WebServer.h>
 #include <FS.h>
 #include <SD.h>
-#include "BluetoothSerial.h"  // ESP32 经典蓝牙串口
 #include "SPIFFS.h"           // SPIFFS 文件系统
 #include <stdlib.h>
+
+// 为排查内存与稳定性问题，默认关闭蓝牙栈。
+// 需要恢复蓝牙时改为 1。
+#define ENABLE_BLUETOOTH 0
+
+#if ENABLE_BLUETOOTH
+#include "BluetoothSerial.h"      // ESP32 经典蓝牙串口
 #include "BluetoothA2DPSource.h"  // ESP32 A2DP 音频源
+#endif
 
 #include "plana.h"  // 由 tools/convert_plana.py 生成
 
@@ -19,17 +26,18 @@
 #define TFT_RST 4   // 屏幕 RST（如接到 EN 或固定复位，可设为 -1）
 #define TFT_BL 15   // 背光控制引脚（如果直接接 3.3V，可删掉相关代码）
 
-// SD 卡 SPI 片选候选引脚（SCK/MOSI/MISO 复用 VSPI: 18/23/19）
-static const uint8_t SD_CS_CANDIDATES[] = {22, 13};
-static uint8_t sdCsPinInUse = 0xFF;
-static const size_t SD_CS_CANDIDATE_COUNT = sizeof(SD_CS_CANDIDATES) / sizeof(SD_CS_CANDIDATES[0]);
+// SD 卡 SPI 片选引脚（SCK/MOSI/MISO 复用 VSPI: 18/23/19）
+#define SD_CS 13
+static const uint32_t SD_SPI_FREQ = 4000000; // 4MHz，优先稳定性
 
 // 使用硬件 SPI (ESP32 VSPI: SCK=18, MOSI=23, MISO=19)
 // 如需改成 HSPI 或自定义 SPI 引脚，可以改用另一个构造函数
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 
 // 蓝牙串口对象
+#if ENABLE_BLUETOOTH
 BluetoothSerial SerialBT;
+#endif
 
 // 简单 Web 服务器
 WebServer server(80);
@@ -169,6 +177,7 @@ static bool drawArrImageFromFile(File &f)
 }
 //================== A2DP 音频（ESP32 作为蓝牙音频发送端） ==================
 
+#if ENABLE_BLUETOOTH
 BluetoothA2DPSource a2dpSource;
 
 static const int a2dpSampleRate = 44100;    // 44.1kHz 立体声 16bit
@@ -201,6 +210,7 @@ int32_t get_sound_data(uint8_t *data, int32_t byteCount)
 
   return byteCount; // 告诉库我们填充了多少字节
 }
+#endif
 
 
 // ================== SD 卡图片播放 ==================
@@ -465,15 +475,18 @@ static void handleRoot()
     return;
   }
 
-  String html;
-  html.reserve(f.size() + 64);
-  while (f.available())
-  {
-    html += (char)f.read();
-  }
+  const size_t fileSize = (size_t)f.size();
+  Serial.print("Serving /index.html, size=");
+  Serial.print(fileSize);
+  Serial.print(", freeHeap=");
+  Serial.println(ESP.getFreeHeap());
+
+  // 使用流式发送，避免把整个 HTML 拼接到堆内存导致 reserve 失败
+  size_t sent = server.streamFile(f, "text/html; charset=utf-8");
   f.close();
 
-  server.send(200, "text/html; charset=utf-8", html);
+  Serial.print("/index.html sent bytes=");
+  Serial.println(sent);
 }
 
 // 播放一次 GIF（从指定 SD 目录按顺序播放所有帧）
@@ -713,39 +726,34 @@ void setup()
     digitalWrite(TFT_BL, HIGH); // 打开背光
   }
 
+  // 共享 SPI 总线场景：先把 TFT CS 拉高，避免 SD 初始化期间总线竞争
+  pinMode(TFT_CS, OUTPUT);
+  digitalWrite(TFT_CS, HIGH);
+
+  // 先释放 SD 片选
+  pinMode(SD_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
+
   // 初始化 240x240 分辨率
   tft.init(240, 240);
   tft.setRotation(1); // 0~3，按需要选择显示方向
 
   // 初始化 SD 卡并扫描 JPG 图片
-  // 显式初始化 VSPI 总线，并把 SD 频率降到 10MHz，减小总线和供电压力
-  // 同时将候选 CS 拉高，避免接线不一致时 SD 被误选中占用总线
+  // 显式初始化 VSPI 总线，并把 SD 频率降到 4MHz，减小线材/电源压力
   SPI.begin(18, 19, 23); // SCK=18, MISO=19, MOSI=23
 
-  for (size_t i = 0; i < SD_CS_CANDIDATE_COUNT; ++i)
+  if (SD.begin(SD_CS, SPI, SD_SPI_FREQ))
   {
-    pinMode(SD_CS_CANDIDATES[i], OUTPUT);
-    digitalWrite(SD_CS_CANDIDATES[i], HIGH);
+    sdAvailable = true;
+    Serial.print("SD card initialized, CS=");
+    Serial.print(SD_CS);
+    Serial.print(", freq=");
+    Serial.println(SD_SPI_FREQ);
+    scanSdImages();
   }
-
-  sdAvailable = false;
-  for (size_t i = 0; i < SD_CS_CANDIDATE_COUNT; ++i)
+  else
   {
-    uint8_t cs = SD_CS_CANDIDATES[i];
-    if (SD.begin(cs, SPI, 10000000))
-    {
-      sdAvailable = true;
-      sdCsPinInUse = cs;
-      Serial.print("SD card initialized, CS=");
-      Serial.println(cs);
-      scanSdImages();
-      break;
-    }
-  }
-
-  if (!sdAvailable)
-  {
-    Serial.println("SD card initialization failed on all CS candidates");
+    Serial.println("SD card initialization failed");
   }
 
   // 先显示第一张图片（索引 0）
@@ -775,6 +783,7 @@ void setup()
 
   // 启动 WiFi AP + WebServer
   WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false); // 降低 AP 场景下的响应抖动
   const char *ssid = "ESP_LCD_AP";
   const char *password = "12345678"; // 简单示例，实际可自行修改
   WiFi.softAP(ssid, password);
@@ -794,9 +803,13 @@ void setup()
   server.begin();
   Serial.println("HTTP server started");
 
+#if ENABLE_BLUETOOTH
   // 启动蓝牙串口，设备名可在此修改
   SerialBT.begin("ESP_LCD");
   Serial.println("Bluetooth started, device name: ESP_LCD");
+#else
+  Serial.println("Bluetooth disabled");
+#endif
 }
 
 void loop()
@@ -806,6 +819,7 @@ void loop()
   // 处理 HTTP 请求
   server.handleClient();
 
+#if ENABLE_BLUETOOTH
   // 处理来自手机的蓝牙命令
   // 建议在手机上使用 "Serial Bluetooth Terminal" 等 APP 连接后发送字符：
   // 'n' 或 'N' -> 下一张
@@ -854,6 +868,7 @@ void loop()
       lastSwitchTime = now; // 蓝牙控制后重置定时
     }
   }
+#endif
 
-  delay(100);
+  delay(10);
 }
