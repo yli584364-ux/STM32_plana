@@ -200,6 +200,9 @@ int32_t get_sound_data(uint8_t *data, int32_t byteCount)
   return byteCount; // 告诉库我们填充了多少字节
 }
 
+
+// ================== SD 卡图片播放 ==================
+
 // 扫描 SD 根目录中的预处理 .arr 图片文件
 static void scanSdImages()
 {
@@ -444,6 +447,9 @@ static void showGifFrameFromSd(const String &path)
   f.close();
 }
 
+
+//================= Web 服务器处理函数 ==================
+
 static String getContentTypeByPath(const String &path)
 {
   String lower = path;
@@ -486,6 +492,15 @@ static bool tryServeFileFromSpiffs(const String &path)
     return false;
   }
 
+  WiFiClient client = server.client();
+  if (!client || !client.connected())
+  {
+    Serial.print("Skip SPIFFS file send, client disconnected: ");
+    Serial.println(path);
+    f.close();
+    return true;
+  }
+
   server.sendHeader("Connection", "close");
   server.streamFile(f, getContentTypeByPath(path));
   f.close();
@@ -517,6 +532,14 @@ static void handleRoot()
   size_t fileSize = (size_t)f.size();
   Serial.print("Serving /index.html, size=");
   Serial.println(fileSize);
+
+  WiFiClient client = server.client();
+  if (!client || !client.connected())
+  {
+    Serial.println("Skip /index.html send: client disconnected");
+    f.close();
+    return;
+  }
 
   // 禁止浏览器缓存页面，确保修改 data/index.html 后手机能立刻看到新内容
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
