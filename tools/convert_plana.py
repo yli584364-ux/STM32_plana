@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from PIL import Image
@@ -11,7 +10,15 @@ TARGET_HEIGHT = 240
 
 # 最多转换多少张图片（比如 6 = 只取前 6 张 jpg）
 # 如果 SPIFFS 空间不足，可以再调小这个数或者把图片分辨率调低
-MAX_IMAGES = 2
+MAX_IMAGES = 10
+
+STATE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "idle": ("idle", "rest"),
+    "eat": ("eat", "food", "meal"),
+    "sleep": ("sleep", "nap"),
+    "work": ("work", "job", "office"),
+    "play": ("play", "game", "fun"),
+}
 
 
 def rgb888_to_rgb565(r, g, b):
@@ -37,6 +44,16 @@ def save_image_to_bin(src_path: Path, bin_path: Path) -> None:
             f.write(struct.pack("<H", value))
 
 
+def infer_state_from_filename(path: Path) -> str:
+    lower_name = path.stem.lower()
+    for state, keywords in STATE_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in lower_name:
+                return state
+    # 未显式标注时默认归入 idle，避免图片被状态逻辑遗漏
+    return "idle"
+
+
 def main():
     root = Path(__file__).resolve().parents[1]
     photo_dir = root / "photo"
@@ -55,14 +72,21 @@ def main():
     data_dir.mkdir(parents=True, exist_ok=True)
 
     bin_files: list[str] = []
+    bin_states: list[str] = []
+    state_counts: dict[str, int] = {k: 0 for k in STATE_KEYWORDS.keys()}
 
-    for idx, path in enumerate(jpg_list):
-        # 统一用简单的顺序文件名，避免中文路径问题
-        bin_name = f"/img_{idx}.bin"
+    for path in jpg_list:
+        state = infer_state_from_filename(path)
+        state_idx = state_counts.get(state, 0)
+        state_counts[state] = state_idx + 1
+
+        # 文件名包含状态信息，便于固件按组筛选
+        bin_name = f"/{state}_{state_idx}.bin"
         bin_path = data_dir / bin_name.lstrip("/")
         print(f"转换图片 {path.name} -> {bin_path}")
         save_image_to_bin(path, bin_path)
         bin_files.append(bin_name)
+        bin_states.append(state)
 
     # 只在头文件里保存宽高和 SPIFFS 中文件名列表
     lines: list[str] = []
@@ -74,6 +98,7 @@ def main():
     lines.append("")
     lines.append(f"const size_t planaImageCount = {len(bin_files)};")
     lines.append("extern const char* const planaImages[];")
+    lines.append("extern const char* const planaImageStates[];")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
@@ -87,6 +112,11 @@ def main():
     cpp_lines.append("const char* const planaImages[] = {")
     for name in bin_files:
         cpp_lines.append(f"    \"{name}\",")
+    cpp_lines.append("};")
+    cpp_lines.append("")
+    cpp_lines.append("const char* const planaImageStates[] = {")
+    for state in bin_states:
+        cpp_lines.append(f"    \"{state}\",")
     cpp_lines.append("};")
 
     cpp_path.parent.mkdir(parents=True, exist_ok=True)

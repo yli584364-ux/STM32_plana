@@ -74,6 +74,125 @@ static bool useSdGifMode = false;
 static size_t currentImageIndex = 0;
 static unsigned long lastSwitchTime = 0;
 
+// SPIFFS 图片状态分组：idle/eat/sleep/work/play
+enum FlashStateGroup
+{
+  FLASH_STATE_IDLE = 0,
+  FLASH_STATE_EAT,
+  FLASH_STATE_SLEEP,
+  FLASH_STATE_WORK,
+  FLASH_STATE_PLAY,
+  FLASH_STATE_ALL,
+  FLASH_STATE_COUNT,
+};
+
+static const size_t MAX_FLASH_GROUP_IMAGES = 64;
+static size_t flashStateGroupCounts[FLASH_STATE_COUNT] = {0};
+static size_t flashStateGroupIndices[FLASH_STATE_COUNT][MAX_FLASH_GROUP_IMAGES];
+
+static FlashStateGroup activeFlashStateGroup = FLASH_STATE_ALL;
+static bool flashStateAutoRandomEnabled = false;
+static unsigned long lastFlashStateRandomSwitchTime = 0;
+static const unsigned long FLASH_STATE_RANDOM_INTERVAL_MS = 5000;
+
+static FlashStateGroup parseStateName(const String &name)
+{
+  String lower = name;
+  lower.toLowerCase();
+
+  if (lower == "idle")
+    return FLASH_STATE_IDLE;
+  if (lower == "eat" || lower == "food")
+    return FLASH_STATE_EAT;
+  if (lower == "sleep")
+    return FLASH_STATE_SLEEP;
+  if (lower == "work")
+    return FLASH_STATE_WORK;
+  if (lower == "play")
+    return FLASH_STATE_PLAY;
+  if (lower == "all")
+    return FLASH_STATE_ALL;
+
+  return FLASH_STATE_COUNT;
+}
+
+static const char *stateNameOf(FlashStateGroup group)
+{
+  switch (group)
+  {
+  case FLASH_STATE_IDLE:
+    return "idle";
+  case FLASH_STATE_EAT:
+    return "eat";
+  case FLASH_STATE_SLEEP:
+    return "sleep";
+  case FLASH_STATE_WORK:
+    return "work";
+  case FLASH_STATE_PLAY:
+    return "play";
+  case FLASH_STATE_ALL:
+    return "all";
+  default:
+    return "unknown";
+  }
+}
+
+static FlashStateGroup inferStateGroupFromLabel(const String &label)
+{
+  String lower = label;
+  lower.toLowerCase();
+
+  if (lower.indexOf("idle") >= 0 || lower.indexOf("rest") >= 0)
+    return FLASH_STATE_IDLE;
+  if (lower.indexOf("eat") >= 0 || lower.indexOf("food") >= 0 || lower.indexOf("meal") >= 0)
+    return FLASH_STATE_EAT;
+  if (lower.indexOf("sleep") >= 0 || lower.indexOf("nap") >= 0)
+    return FLASH_STATE_SLEEP;
+  if (lower.indexOf("work") >= 0 || lower.indexOf("job") >= 0 || lower.indexOf("office") >= 0)
+    return FLASH_STATE_WORK;
+  if (lower.indexOf("play") >= 0 || lower.indexOf("game") >= 0 || lower.indexOf("fun") >= 0)
+    return FLASH_STATE_PLAY;
+
+  // 未标注时默认归入 idle
+  return FLASH_STATE_IDLE;
+}
+
+static void buildFlashStateGroups()
+{
+  for (size_t g = 0; g < FLASH_STATE_COUNT; ++g)
+  {
+    flashStateGroupCounts[g] = 0;
+  }
+
+  for (size_t i = 0; i < planaImageCount && i < MAX_FLASH_GROUP_IMAGES; ++i)
+  {
+    String stateLabel = String(planaImageStates[i]);
+    FlashStateGroup g = inferStateGroupFromLabel(stateLabel);
+
+    if (flashStateGroupCounts[g] < MAX_FLASH_GROUP_IMAGES)
+    {
+      flashStateGroupIndices[g][flashStateGroupCounts[g]++] = i;
+    }
+    if (flashStateGroupCounts[FLASH_STATE_ALL] < MAX_FLASH_GROUP_IMAGES)
+    {
+      flashStateGroupIndices[FLASH_STATE_ALL][flashStateGroupCounts[FLASH_STATE_ALL]++] = i;
+    }
+  }
+
+  Serial.print("Flash state groups idle/eat/sleep/work/play/all = ");
+  Serial.print(flashStateGroupCounts[FLASH_STATE_IDLE]);
+  Serial.print("/");
+  Serial.print(flashStateGroupCounts[FLASH_STATE_EAT]);
+  Serial.print("/");
+  Serial.print(flashStateGroupCounts[FLASH_STATE_SLEEP]);
+  Serial.print("/");
+  Serial.print(flashStateGroupCounts[FLASH_STATE_WORK]);
+  Serial.print("/");
+  Serial.print(flashStateGroupCounts[FLASH_STATE_PLAY]);
+  Serial.print("/");
+  Serial.println(flashStateGroupCounts[FLASH_STATE_ALL]);
+}
+
 // 从数组文本 .arr 中解析下一个像素值（支持 0x1234 或十进制）
 static bool readNextArrayValue(File &f, uint16_t &out)
 {
@@ -459,6 +578,27 @@ static void showGifFrameFromSd(const String &path)
   f.close();
 }
 
+static bool pickRandomFlashImageFromActiveState()
+{
+  if (activeFlashStateGroup >= FLASH_STATE_COUNT)
+  {
+    return false;
+  }
+
+  size_t count = flashStateGroupCounts[activeFlashStateGroup];
+  if (count == 0)
+  {
+    return false;
+  }
+
+  size_t slot = (size_t)random((long)count);
+  currentImageIndex = flashStateGroupIndices[activeFlashStateGroup][slot];
+  showCurrentImage();
+  lastSwitchTime = millis();
+  lastFlashStateRandomSwitchTime = lastSwitchTime;
+  return true;
+}
+
 
 //================= Web 服务器处理函数 ==================
 
@@ -510,6 +650,8 @@ static void playGifFromSdFolder(const char *folder)
 
 static void handleNext()
 {
+  flashStateAutoRandomEnabled = false;
+
   currentImageIndex++;
   if (currentImageIndex >= imageCount)
   {
@@ -530,6 +672,8 @@ static void handleNext()
 
 static void handlePrev()
 {
+  flashStateAutoRandomEnabled = false;
+
   if (currentImageIndex == 0)
   {
     currentImageIndex = (imageCount == 0 ? 0 : imageCount - 1);
@@ -553,6 +697,8 @@ static void handlePrev()
 
 static void handleSet()
 {
+  flashStateAutoRandomEnabled = false;
+
   if (!server.hasArg("i"))
   {
     server.send(400, "text/plain", "missing i");
@@ -578,9 +724,58 @@ static void handleSet()
   server.send(200, "text/plain", "OK");
 }
 
+static void handleState()
+{
+  if (!server.hasArg("name"))
+  {
+    server.send(400, "text/plain", "missing name");
+    return;
+  }
+
+  String name = server.arg("name");
+  name.trim();
+  name.toLowerCase();
+
+  if (name == "off" || name == "manual")
+  {
+    flashStateAutoRandomEnabled = false;
+    activeFlashStateGroup = FLASH_STATE_ALL;
+    server.send(200, "text/plain", "OFF");
+    return;
+  }
+
+  FlashStateGroup g = parseStateName(name);
+  if (g == FLASH_STATE_COUNT)
+  {
+    server.send(400, "text/plain", "invalid state");
+    return;
+  }
+
+  activeFlashStateGroup = g;
+  flashStateAutoRandomEnabled = true;
+
+  if (useSdImages)
+  {
+    // 状态组随机仅针对 SPIFFS 图片；当前在 SD 模式则只记录状态。
+    server.send(200, "text/plain", stateNameOf(activeFlashStateGroup));
+    return;
+  }
+
+  if (!pickRandomFlashImageFromActiveState())
+  {
+    flashStateAutoRandomEnabled = false;
+    server.send(404, "text/plain", "NO_STATE_IMAGE");
+    return;
+  }
+
+  server.send(200, "text/plain", stateNameOf(activeFlashStateGroup));
+}
+
 // 切换图片来源：在 SPIFFS(Flash) 与 SD 卡图片之间互相切换
 static void handlePhotoToggle()
 {
+  flashStateAutoRandomEnabled = false;
+
   // 如果两边都没有图片，就直接返回
   if (!sdAvailable || sdImageCount == 0)
   {
@@ -646,6 +841,8 @@ static void handlePhotoToggle()
 // HTTP 接口：/gif -> 从 SD 卡 gif_X 目录播放一次 GIF
 static void handleGif()
 {
+  flashStateAutoRandomEnabled = false;
+
   if (gifSetCount == 0)
   {
     scanGifSetsOnSd();
@@ -680,6 +877,8 @@ static void handleGif()
 // HTTP 接口：/sdmode -> 切换 SD 普通图片 / SD GIF 模式
 static void handleSdModeToggle()
 {
+  flashStateAutoRandomEnabled = false;
+
   if (!sdAvailable)
   {
     server.send(200, "text/plain", "NO_SD");
@@ -719,6 +918,8 @@ void setup()
   {
     Serial.println("SPIFFS mount failed");
   }
+
+  randomSeed((uint32_t)micros());
 
   if (TFT_BL >= 0)
   {
@@ -762,6 +963,7 @@ void setup()
   {
     useSdImages = false;
     imageCount = planaImageCount;
+    buildFlashStateGroups();
     Serial.print("Use images from SPIFFS (Flash), count: ");
     Serial.println(imageCount);
   }
@@ -797,6 +999,7 @@ void setup()
   server.on("/next", HTTP_GET, handleNext);
   server.on("/prev", HTTP_GET, handlePrev);
   server.on("/set", HTTP_GET, handleSet);
+  server.on("/state", HTTP_GET, handleState);
   server.on("/photo", HTTP_GET, handlePhotoToggle);
   server.on("/gif", HTTP_GET, handleGif);
   server.on("/sdmode", HTTP_GET, handleSdModeToggle);
@@ -818,6 +1021,17 @@ void loop()
 
   // 处理 HTTP 请求
   server.handleClient();
+
+  if (flashStateAutoRandomEnabled && !useSdImages && imageCount > 0)
+  {
+    if ((now - lastFlashStateRandomSwitchTime) >= FLASH_STATE_RANDOM_INTERVAL_MS)
+    {
+      if (!pickRandomFlashImageFromActiveState())
+      {
+        flashStateAutoRandomEnabled = false;
+      }
+    }
+  }
 
 #if ENABLE_BLUETOOTH
   // 处理来自手机的蓝牙命令

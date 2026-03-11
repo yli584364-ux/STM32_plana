@@ -27,14 +27,15 @@
   <div style="margin-top:1.5rem;">
     <label for="status" style="margin-right:0.5rem;">状态选择：</label>
     <select id="status" onchange="changeStatus()" style="padding:0.4rem 0.6rem;border-radius:6px;border:1px solid #555;background:#222;color:#eee;">
-      <option value="">状态选择</option>
-      <option value="0">闲着　:D</option>
-      <option value="1">干饭　(　o=^•ェ•)o　┏━┓</option>
-      <option value="2">睡觉　(～﹃～)~zZ</option>
-      <option value="3">干活　/(ㄒoㄒ)/~~</option>
-      <option value="4">玩　φ(゜▽゜*)♪</option>
+      <option value="">手动模式（不自动切换）</option>
+      <option value="idle">闲着　:D</option>
+      <option value="eat">干饭　(　o=^•ェ•)o　┏━┓</option>
+      <option value="sleep">睡觉　(～﹃～)~zZ</option>
+      <option value="work">干活　/(ㄒoㄒ)/~~</option>
+      <option value="play">玩　φ(゜▽゜*)♪</option>
     </select>
   </div>
+  <p id="stateHint" style="font-size:0.9rem;opacity:0.85;">当前：手动模式（不自动随机）</p>
   <div style="margin-top:1.5rem;">
     <button id="photoToggleBtn" class="Photo_state_change photo-flash" onclick="togglePhotoMode()">Flash照片显示</button>
   </div>
@@ -95,9 +96,24 @@
     }
     function changeStatus() {
       const s = document.getElementById('status').value;
-      if (s === '') return;
-      // 不同状态对应不同图片索引，请根据自己的图片顺序调整下面的映射
-      fetch('/set?i=' + encodeURIComponent(s)).catch(() => {});
+      const hint = document.getElementById('stateHint');
+
+      if (s === '') {
+        fetch('/state?name=off')
+          .then(() => {
+            if (hint) hint.textContent = '当前：手动模式（不自动随机）';
+          })
+          .catch(() => {});
+        return;
+      }
+
+      fetch('/state?name=' + encodeURIComponent(s))
+        .then(r => r.text())
+        .then(t => {
+          if (!hint) return;
+          hint.textContent = '当前：' + t.trim() + ' 组（设备端每 5 秒随机切换）';
+        })
+        .catch(() => {});
     }
   </script>
 </body>
