@@ -444,12 +444,59 @@ static void showGifFrameFromSd(const String &path)
   f.close();
 }
 
+static String getContentTypeByPath(const String &path)
+{
+  String lower = path;
+  lower.toLowerCase();
+
+  if (lower.endsWith(".html") || lower.endsWith(".htm"))
+    return "text/html; charset=utf-8";
+  if (lower.endsWith(".css"))
+    return "text/css";
+  if (lower.endsWith(".js"))
+    return "application/javascript";
+  if (lower.endsWith(".json"))
+    return "application/json";
+  if (lower.endsWith(".png"))
+    return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg"))
+    return "image/jpeg";
+  if (lower.endsWith(".gif"))
+    return "image/gif";
+  if (lower.endsWith(".svg"))
+    return "image/svg+xml";
+  if (lower.endsWith(".ico"))
+    return "image/x-icon";
+  if (lower.endsWith(".txt"))
+    return "text/plain; charset=utf-8";
+
+  return "application/octet-stream";
+}
+
+static bool tryServeFileFromSpiffs(const String &path)
+{
+  if (!SPIFFS.exists(path))
+  {
+    return false;
+  }
+
+  File f = SPIFFS.open(path, "r");
+  if (!f)
+  {
+    return false;
+  }
+
+  server.sendHeader("Connection", "close");
+  server.streamFile(f, getContentTypeByPath(path));
+  f.close();
+  return true;
+}
+
 // Web 处理函数
 static void handleRoot()
 {
   // 尝试从 SPIFFS 读取 /index.html
-  File f = SPIFFS.open("/index.html", "r");
-  if (!f)
+  if (!SPIFFS.exists("/index.html"))
   {
     // 简单降级：如果文件不存在，就返回一个非常小的页面
     server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
@@ -457,6 +504,13 @@ static void handleRoot()
     server.sendHeader("Expires", "-1");
     server.send(200, "text/html; charset=utf-8",
                 "<html><body><h1>ESP LCD</h1><p>No index.html on SPIFFS</p></body></html>");
+    return;
+  }
+
+  File f = SPIFFS.open("/index.html", "r");
+  if (!f)
+  {
+    server.send(500, "text/plain; charset=utf-8", "open /index.html failed");
     return;
   }
 
@@ -468,42 +522,37 @@ static void handleRoot()
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "-1");
-  // 强制短连接并分块发送，避免某些手机在 keep-alive 下出现 write() 失败
+  // 强制短连接并使用 streamFile，避免手写 chunk 循环导致阻塞重试
   server.sendHeader("Connection", "close");
-  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server.send(200, "text/html; charset=utf-8", "");
-
-  uint8_t buf[512];
-  size_t totalSent = 0;
-  while (f.available())
-  {
-    size_t n = f.read(buf, sizeof(buf));
-    if (n == 0)
-    {
-      break;
-    }
-
-    size_t w = server.client().write(buf, n);
-    if (w == 0)
-    {
-      Serial.println("/index.html write failed while chunk sending");
-      break;
-    }
-
-    totalSent += w;
-    if (w < n)
-    {
-      Serial.println("/index.html partial chunk write");
-      break;
-    }
-    delay(1); // 让出时间片，降低 WiFi 发送阻塞概率
-  }
-
+  size_t sent = server.streamFile(f, "text/html; charset=utf-8");
   f.close();
-  server.sendContent(""); // 结束 chunked 发送
 
   Serial.print("/index.html sent bytes=");
-  Serial.println(totalSent);
+  Serial.println(sent);
+}
+
+static void handleNotFound()
+{
+  String path = server.uri();
+
+  if (path == "/")
+  {
+    handleRoot();
+    return;
+  }
+
+  if (path == "/favicon.ico")
+  {
+    server.send(204);
+    return;
+  }
+
+  if (tryServeFileFromSpiffs(path))
+  {
+    return;
+  }
+
+  server.send(404, "text/plain; charset=utf-8", "Not Found");
 }
 
 // 播放一次 GIF（从指定 SD 目录按顺序播放所有帧）
@@ -805,6 +854,7 @@ void setup()
   server.on("/photo", HTTP_GET, handlePhotoToggle);
   server.on("/gif", HTTP_GET, handleGif);
   server.on("/sdmode", HTTP_GET, handleSdModeToggle);
+  server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
 
