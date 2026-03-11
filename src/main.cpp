@@ -19,8 +19,10 @@
 #define TFT_RST 4   // 屏幕 RST（如接到 EN 或固定复位，可设为 -1）
 #define TFT_BL 15   // 背光控制引脚（如果直接接 3.3V，可删掉相关代码）
 
-// SD 卡 SPI 片选引脚（SCK/MOSI/MISO 复用 VSPI: 18/23/19）
-#define SD_CS 22
+// SD 卡 SPI 片选候选引脚（SCK/MOSI/MISO 复用 VSPI: 18/23/19）
+static const uint8_t SD_CS_CANDIDATES[] = {22, 13};
+static uint8_t sdCsPinInUse = 0xFF;
+static const size_t SD_CS_CANDIDATE_COUNT = sizeof(SD_CS_CANDIDATES) / sizeof(SD_CS_CANDIDATES[0]);
 
 // 使用硬件 SPI (ESP32 VSPI: SCK=18, MOSI=23, MISO=19)
 // 如需改成 HSPI 或自定义 SPI 引脚，可以改用另一个构造函数
@@ -717,17 +719,33 @@ void setup()
 
   // 初始化 SD 卡并扫描 JPG 图片
   // 显式初始化 VSPI 总线，并把 SD 频率降到 10MHz，减小总线和供电压力
-  SPI.begin(18, 19, 23, SD_CS); // SCK=18, MISO=19, MOSI=23, SS=SD_CS
+  // 同时将候选 CS 拉高，避免接线不一致时 SD 被误选中占用总线
+  SPI.begin(18, 19, 23); // SCK=18, MISO=19, MOSI=23
 
-  if (SD.begin(SD_CS, SPI, 10000000))
+  for (size_t i = 0; i < SD_CS_CANDIDATE_COUNT; ++i)
   {
-    sdAvailable = true;
-    Serial.println("SD card initialized");
-    scanSdImages();
+    pinMode(SD_CS_CANDIDATES[i], OUTPUT);
+    digitalWrite(SD_CS_CANDIDATES[i], HIGH);
   }
-  else
+
+  sdAvailable = false;
+  for (size_t i = 0; i < SD_CS_CANDIDATE_COUNT; ++i)
   {
-    Serial.println("SD card initialization failed");
+    uint8_t cs = SD_CS_CANDIDATES[i];
+    if (SD.begin(cs, SPI, 10000000))
+    {
+      sdAvailable = true;
+      sdCsPinInUse = cs;
+      Serial.print("SD card initialized, CS=");
+      Serial.println(cs);
+      scanSdImages();
+      break;
+    }
+  }
+
+  if (!sdAvailable)
+  {
+    Serial.println("SD card initialization failed on all CS candidates");
   }
 
   // 先显示第一张图片（索引 0）
