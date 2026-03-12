@@ -9,6 +9,7 @@
 #include "display.h"
 #include "web.h"
 #include "plana.h"
+#include "external_flash.h"
 
 #define ENABLE_BLUETOOTH 0
 
@@ -54,6 +55,16 @@ void setup()
   else
   {
     Serial.println("SD card initialization failed");
+  }
+
+  extFlashAvailable = extFlashBegin();
+  if (extFlashAvailable)
+  {
+    extFlashGifReady = refreshExternalGifHeader();
+  }
+  else
+  {
+    Serial.println("External flash initialization failed");
   }
 
   if (planaImageCount > 0)

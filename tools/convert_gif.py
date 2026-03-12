@@ -35,7 +35,7 @@ def save_frame_to_bin(frame: Image.Image, bin_path: Path) -> None:
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     photo_dir = root / "photo"
-    data_dir = root / "data"
+    data_dir = root / "gif_data"
     include_dir = root / "include"
     src_dir = root / "src"
 

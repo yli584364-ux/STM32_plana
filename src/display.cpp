@@ -8,13 +8,17 @@
 
 #include "pin.h"
 #include "plana.h"
+#include "gif_frames.h"
+#include "external_flash.h"
 
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 
+bool flashStateAutoRandomEnabled = false;
 bool sdAvailable = false;
 bool useSdImages = false;
-bool useSdGifMode = false;
-bool flashStateAutoRandomEnabled = false;
+bool extFlashAvailable = false;
+bool extFlashGifReady = false;
+bool useExternalFlashForGif = false;
 
 size_t imageCount = 0;
 size_t currentImageIndex = 0;
@@ -23,106 +27,18 @@ unsigned long lastFlashStateRandomSwitchTime = 0;
 const unsigned long FLASH_STATE_RANDOM_INTERVAL_MS = 5000;
 
 FlashStateGroup activeFlashStateGroup = FLASH_STATE_ALL;
-
 const uint8_t MAX_SD_IMAGES = 64;
 String sdImageNames[MAX_SD_IMAGES];
 size_t sdImageCount = 0;
-
-const uint8_t MAX_GIF_FRAMES = 80;
-String gifFrameSdNames[MAX_GIF_FRAMES];
-size_t gifFrameSdCount = 0;
-
-const uint8_t MAX_GIF_SETS = 16;
-String gifSetFolders[MAX_GIF_SETS];
-size_t gifSetCount = 0;
 
 const size_t MAX_FLASH_GROUP_IMAGES = 64;
 static size_t flashStateGroupCounts[FLASH_STATE_COUNT] = {0};
 static size_t flashStateGroupIndices[FLASH_STATE_COUNT][MAX_FLASH_GROUP_IMAGES];
 
-static FlashStateGroup inferStateGroupFromLabel(const String &label)
-{
-  String lower = label;
-  lower.toLowerCase();
-
-  if (lower.indexOf("idle") >= 0 || lower.indexOf("rest") >= 0)
-    return FLASH_STATE_IDLE;
-  if (lower.indexOf("eat") >= 0 || lower.indexOf("food") >= 0 || lower.indexOf("meal") >= 0)
-    return FLASH_STATE_EAT;
-  if (lower.indexOf("sleep") >= 0 || lower.indexOf("nap") >= 0)
-    return FLASH_STATE_SLEEP;
-  if (lower.indexOf("work") >= 0 || lower.indexOf("job") >= 0 || lower.indexOf("office") >= 0)
-    return FLASH_STATE_WORK;
-  if (lower.indexOf("play") >= 0 || lower.indexOf("game") >= 0 || lower.indexOf("fun") >= 0)
-    return FLASH_STATE_PLAY;
-
-  return FLASH_STATE_IDLE;
-}
-
-FlashStateGroup parseStateName(const String &name)
-{
-  String lower = name;
-  lower.toLowerCase();
-
-  if (lower == "idle")
-    return FLASH_STATE_IDLE;
-  if (lower == "eat" || lower == "food")
-    return FLASH_STATE_EAT;
-  if (lower == "sleep")
-    return FLASH_STATE_SLEEP;
-  if (lower == "work")
-    return FLASH_STATE_WORK;
-  if (lower == "play")
-    return FLASH_STATE_PLAY;
-  if (lower == "all")
-    return FLASH_STATE_ALL;
-
-  return FLASH_STATE_COUNT;
-}
-
-const char *stateNameOf(FlashStateGroup group)
-{
-  switch (group)
-  {
-  case FLASH_STATE_IDLE:
-    return "idle";
-  case FLASH_STATE_EAT:
-    return "eat";
-  case FLASH_STATE_SLEEP:
-    return "sleep";
-  case FLASH_STATE_WORK:
-    return "work";
-  case FLASH_STATE_PLAY:
-    return "play";
-  case FLASH_STATE_ALL:
-    return "all";
-  default:
-    return "unknown";
-  }
-}
-
-void buildFlashStateGroups()
-{
-  for (size_t g = 0; g < FLASH_STATE_COUNT; ++g)
-  {
-    flashStateGroupCounts[g] = 0;
-  }
-
-  for (size_t i = 0; i < planaImageCount && i < MAX_FLASH_GROUP_IMAGES; ++i)
-  {
-    String stateLabel = String(planaImageStates[i]);
-    FlashStateGroup g = inferStateGroupFromLabel(stateLabel);
-
-    if (flashStateGroupCounts[g] < MAX_FLASH_GROUP_IMAGES)
-    {
-      flashStateGroupIndices[g][flashStateGroupCounts[g]++] = i;
-    }
-    if (flashStateGroupCounts[FLASH_STATE_ALL] < MAX_FLASH_GROUP_IMAGES)
-    {
-      flashStateGroupIndices[FLASH_STATE_ALL][flashStateGroupCounts[FLASH_STATE_ALL]++] = i;
-    }
-  }
-}
+static const uint32_t EXT_GIF_MAGIC = 0x31464745UL; // "EGF1"
+static const uint16_t EXT_GIF_VERSION = 1;
+static const uint32_t EXT_GIF_DATA_START = 4096;
+static ExternalGifHeader g_extGifHeader = {};
 
 static bool readNextArrayValue(File &f, uint16_t &out)
 {
@@ -224,9 +140,151 @@ static bool drawArrImageFromFile(File &f)
   return true;
 }
 
+static FlashStateGroup inferStateGroupFromLabel(const String &label)
+{
+  String lower = label;
+  lower.toLowerCase();
+
+  if (lower.indexOf("idle") >= 0 || lower.indexOf("rest") >= 0)
+    return FLASH_STATE_IDLE;
+  if (lower.indexOf("eat") >= 0 || lower.indexOf("food") >= 0 || lower.indexOf("meal") >= 0)
+    return FLASH_STATE_EAT;
+  if (lower.indexOf("sleep") >= 0 || lower.indexOf("nap") >= 0)
+    return FLASH_STATE_SLEEP;
+  if (lower.indexOf("work") >= 0 || lower.indexOf("job") >= 0 || lower.indexOf("office") >= 0)
+    return FLASH_STATE_WORK;
+  if (lower.indexOf("play") >= 0 || lower.indexOf("game") >= 0 || lower.indexOf("fun") >= 0)
+    return FLASH_STATE_PLAY;
+
+  return FLASH_STATE_IDLE;
+}
+
+FlashStateGroup parseStateName(const String &name)
+{
+  String lower = name;
+  lower.toLowerCase();
+
+  if (lower == "idle")
+    return FLASH_STATE_IDLE;
+  if (lower == "eat" || lower == "food")
+    return FLASH_STATE_EAT;
+  if (lower == "sleep")
+    return FLASH_STATE_SLEEP;
+  if (lower == "work")
+    return FLASH_STATE_WORK;
+  if (lower == "play")
+    return FLASH_STATE_PLAY;
+  if (lower == "all")
+    return FLASH_STATE_ALL;
+
+  return FLASH_STATE_COUNT;
+}
+
+const char *stateNameOf(FlashStateGroup group)
+{
+  switch (group)
+  {
+  case FLASH_STATE_IDLE:
+    return "idle";
+  case FLASH_STATE_EAT:
+    return "eat";
+  case FLASH_STATE_SLEEP:
+    return "sleep";
+  case FLASH_STATE_WORK:
+    return "work";
+  case FLASH_STATE_PLAY:
+    return "play";
+  case FLASH_STATE_ALL:
+    return "all";
+  default:
+    return "unknown";
+  }
+}
+
+void buildFlashStateGroups()
+{
+  for (size_t g = 0; g < FLASH_STATE_COUNT; ++g)
+  {
+    flashStateGroupCounts[g] = 0;
+  }
+
+  for (size_t i = 0; i < planaImageCount && i < MAX_FLASH_GROUP_IMAGES; ++i)
+  {
+    String stateLabel = String(planaImageStates[i]);
+    FlashStateGroup g = inferStateGroupFromLabel(stateLabel);
+
+    if (flashStateGroupCounts[g] < MAX_FLASH_GROUP_IMAGES)
+    {
+      flashStateGroupIndices[g][flashStateGroupCounts[g]++] = i;
+    }
+    if (flashStateGroupCounts[FLASH_STATE_ALL] < MAX_FLASH_GROUP_IMAGES)
+    {
+      flashStateGroupIndices[FLASH_STATE_ALL][flashStateGroupCounts[FLASH_STATE_ALL]++] = i;
+    }
+  }
+}
+
+static bool validateExternalGifHeader(const ExternalGifHeader &h)
+{
+  if (h.magic != EXT_GIF_MAGIC || h.version != EXT_GIF_VERSION)
+  {
+    return false;
+  }
+  if (h.width != planaWidth || h.height != planaHeight)
+  {
+    return false;
+  }
+  if (h.frameCount == 0 || h.frameSizeBytes == 0)
+  {
+    return false;
+  }
+  if (h.dataStartAddr < EXT_GIF_DATA_START)
+  {
+    return false;
+  }
+
+  uint64_t endAddr = (uint64_t)h.dataStartAddr + (uint64_t)h.totalDataBytes;
+  if (endAddr > (uint64_t)EXT_FLASH_TOTAL_BYTES)
+  {
+    return false;
+  }
+  return true;
+}
+
+bool refreshExternalGifHeader()
+{
+  if (!extFlashAvailable)
+  {
+    extFlashGifReady = false;
+    return false;
+  }
+
+  ExternalGifHeader h = {};
+  if (!extFlashLoadGifHeader(h))
+  {
+    extFlashGifReady = false;
+    return false;
+  }
+
+  if (!validateExternalGifHeader(h))
+  {
+    extFlashGifReady = false;
+    return false;
+  }
+
+  g_extGifHeader = h;
+  extFlashGifReady = true;
+  return true;
+}
+
 void scanSdImages()
 {
   sdImageCount = 0;
+
+  if (!sdAvailable)
+  {
+    return;
+  }
 
   File root = SD.open("/");
   if (!root)
@@ -258,56 +316,6 @@ void scanSdImages()
   }
 }
 
-void scanGifSetsOnSd()
-{
-  gifSetCount = 0;
-
-  if (!sdAvailable)
-  {
-    return;
-  }
-
-  File root = SD.open("/");
-  if (!root)
-  {
-    Serial.println("Failed to open SD root when scanning GIF sets");
-    return;
-  }
-
-  File file = root.openNextFile();
-  while (file && gifSetCount < MAX_GIF_SETS)
-  {
-    if (file.isDirectory())
-    {
-      String name = file.name();
-      if (!name.startsWith("/"))
-      {
-        name = String("/") + name;
-      }
-      String lower = name;
-      lower.toLowerCase();
-      if (lower.startsWith("/gif_"))
-      {
-        gifSetFolders[gifSetCount++] = name;
-      }
-    }
-    file = root.openNextFile();
-  }
-
-  for (size_t i = 0; i + 1 < gifSetCount; ++i)
-  {
-    for (size_t j = i + 1; j < gifSetCount; ++j)
-    {
-      if (gifSetFolders[j] < gifSetFolders[i])
-      {
-        String tmp = gifSetFolders[i];
-        gifSetFolders[i] = gifSetFolders[j];
-        gifSetFolders[j] = tmp;
-      }
-    }
-  }
-}
-
 void showCurrentImage()
 {
   if (imageCount == 0)
@@ -335,128 +343,224 @@ void showCurrentImage()
       Serial.println("Failed to draw SD ARR image");
     }
     f.close();
+    return;
   }
-  else
+
+  if (planaImageCount == 0)
   {
-    if (planaImageCount == 0)
-    {
-      return;
-    }
-
-    const char *path = planaImages[currentImageIndex % planaImageCount];
-    File f = SPIFFS.open(path, "rb");
-    if (!f)
-    {
-      Serial.print("Failed to open image file: ");
-      Serial.println(path);
-      return;
-    }
-
-    static uint16_t lineBuf[240];
-    tft.fillScreen(ST77XX_BLACK);
-
-    for (uint16_t y = 0; y < planaHeight; ++y)
-    {
-      size_t toRead = (size_t)planaWidth * 2;
-      size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
-      if (readBytes != toRead)
-      {
-        break;
-      }
-      tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
-    }
-
-    f.close();
-  }
-}
-
-size_t loadGifFramesFromSdFolder(const char *folder)
-{
-  gifFrameSdCount = 0;
-
-  if (!sdAvailable)
-  {
-    Serial.println("GIF: SD not available");
-    return 0;
+    return;
   }
 
-  File dir = SD.open(folder);
-  if (!dir || !dir.isDirectory())
-  {
-    Serial.print("GIF: not a directory: ");
-    Serial.println(folder);
-    return 0;
-  }
-
-  File file = dir.openNextFile();
-  while (file && gifFrameSdCount < MAX_GIF_FRAMES)
-  {
-    if (!file.isDirectory())
-    {
-      String name = file.name();
-      String lower = name;
-      lower.toLowerCase();
-      if (lower.endsWith(".arr"))
-      {
-        if (!name.startsWith("/"))
-        {
-          name = String("/") + name;
-        }
-        gifFrameSdNames[gifFrameSdCount++] = name;
-      }
-    }
-    file = dir.openNextFile();
-  }
-
-  for (size_t i = 0; i + 1 < gifFrameSdCount; ++i)
-  {
-    for (size_t j = i + 1; j < gifFrameSdCount; ++j)
-    {
-      if (gifFrameSdNames[j] < gifFrameSdNames[i])
-      {
-        String tmp = gifFrameSdNames[i];
-        gifFrameSdNames[i] = gifFrameSdNames[j];
-        gifFrameSdNames[j] = tmp;
-      }
-    }
-  }
-
-  return gifFrameSdCount;
-}
-
-void showGifFrameFromSd(const String &path)
-{
-  File f = SD.open(path.c_str(), "r");
+  const char *path = planaImages[currentImageIndex % planaImageCount];
+  File f = SPIFFS.open(path, "rb");
   if (!f)
   {
-    Serial.print("Failed to open GIF frame from SD: ");
+    Serial.print("Failed to open image file: ");
     Serial.println(path);
     return;
   }
 
-  if (!drawArrImageFromFile(f))
+  static uint16_t lineBuf[240];
+  tft.fillScreen(ST77XX_BLACK);
+
+  for (uint16_t y = 0; y < planaHeight; ++y)
   {
-    Serial.println("Failed to draw GIF ARR frame from SD");
+    size_t toRead = (size_t)planaWidth * 2;
+    size_t readBytes = f.read((uint8_t *)lineBuf, toRead);
+    if (readBytes != toRead)
+    {
+      break;
+    }
+    tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
   }
 
   f.close();
 }
 
-void playGifFromSdFolder(const char *folder)
+size_t getOnboardGifFrameCount()
 {
-  size_t count = loadGifFramesFromSdFolder(folder);
-  if (count == 0)
+  return gifFrameCount;
+}
+
+static bool drawGifFrameFromSpiffs(const char *path)
+{
+  File f = SPIFFS.open(path, "rb");
+  if (!f)
   {
-    Serial.println("playGifFromSdFolder: no frames");
+    return false;
+  }
+
+  static uint16_t lineBuf[240];
+  for (uint16_t y = 0; y < planaHeight; ++y)
+  {
+    size_t bytesPerLine = (size_t)planaWidth * 2;
+    size_t readBytes = f.read((uint8_t *)lineBuf, bytesPerLine);
+    if (readBytes != bytesPerLine)
+    {
+      f.close();
+      return false;
+    }
+    tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
+  }
+
+  f.close();
+  return true;
+}
+
+static bool drawGifFrameFromExternal(size_t frameIndex)
+{
+  if (!extFlashGifReady || g_extGifHeader.frameCount == 0)
+  {
+    return false;
+  }
+
+  size_t idx = frameIndex % g_extGifHeader.frameCount;
+  uint32_t frameAddr = g_extGifHeader.dataStartAddr + (uint32_t)(idx * g_extGifHeader.frameSizeBytes);
+  static uint16_t lineBuf[240];
+
+  for (uint16_t y = 0; y < planaHeight; ++y)
+  {
+    uint32_t lineAddr = frameAddr + (uint32_t)y * (uint32_t)planaWidth * 2UL;
+    if (!extFlashReadBytes(lineAddr, (uint8_t *)lineBuf, (size_t)planaWidth * 2))
+    {
+      return false;
+    }
+    tft.drawRGBBitmap(0, y, lineBuf, planaWidth, 1);
+  }
+
+  return true;
+}
+
+void playGifFromOnboardFlash()
+{
+  if (gifFrameCount == 0)
+  {
+    Serial.println("GIF onboard: no frames");
     return;
   }
 
   const uint16_t frameDelayMs = 80;
-  for (size_t i = 0; i < count; ++i)
+  for (size_t i = 0; i < gifFrameCount; ++i)
   {
-    showGifFrameFromSd(gifFrameSdNames[i]);
+    if (!drawGifFrameFromSpiffs(gifFrames[i]))
+    {
+      Serial.print("GIF onboard: failed frame ");
+      Serial.println(i);
+      return;
+    }
     delay(frameDelayMs);
   }
+}
+
+void playGifFromExternalFlash()
+{
+  if (!extFlashGifReady)
+  {
+    Serial.println("GIF external: no valid data");
+    return;
+  }
+
+  const uint16_t frameDelayMs = 80;
+  for (size_t i = 0; i < g_extGifHeader.frameCount; ++i)
+  {
+    if (!drawGifFrameFromExternal(i))
+    {
+      Serial.print("GIF external: failed frame ");
+      Serial.println(i);
+      return;
+    }
+    delay(frameDelayMs);
+  }
+}
+
+bool syncGifDataToExternalFlash()
+{
+  if (!extFlashAvailable)
+  {
+    return false;
+  }
+  if (gifFrameCount == 0)
+  {
+    return false;
+  }
+
+  const uint32_t frameSize = (uint32_t)planaWidth * (uint32_t)planaHeight * 2UL;
+  const uint32_t totalBytes = frameSize * (uint32_t)gifFrameCount;
+  const uint32_t endAddr = EXT_GIF_DATA_START + totalBytes;
+  if (endAddr > EXT_FLASH_TOTAL_BYTES)
+  {
+    return false;
+  }
+
+  if (!extFlashEraseRange(0, EXT_GIF_DATA_START + totalBytes))
+  {
+    return false;
+  }
+
+  uint8_t *buf = (uint8_t *)malloc(1024);
+  if (!buf)
+  {
+    return false;
+  }
+
+  uint32_t writeAddr = EXT_GIF_DATA_START;
+  for (size_t i = 0; i < gifFrameCount; ++i)
+  {
+    File f = SPIFFS.open(gifFrames[i], "rb");
+    if (!f)
+    {
+      free(buf);
+      return false;
+    }
+
+    uint32_t frameWritten = 0;
+    while (frameWritten < frameSize)
+    {
+      size_t need = frameSize - frameWritten;
+      if (need > 1024)
+      {
+        need = 1024;
+      }
+      size_t got = f.read(buf, need);
+      if (got != need)
+      {
+        f.close();
+        free(buf);
+        return false;
+      }
+
+      if (!extFlashWriteBytes(writeAddr, buf, got))
+      {
+        f.close();
+        free(buf);
+        return false;
+      }
+
+      writeAddr += (uint32_t)got;
+      frameWritten += (uint32_t)got;
+    }
+
+    f.close();
+  }
+
+  free(buf);
+
+  ExternalGifHeader hdr = {};
+  hdr.magic = EXT_GIF_MAGIC;
+  hdr.version = EXT_GIF_VERSION;
+  hdr.width = planaWidth;
+  hdr.height = planaHeight;
+  hdr.frameCount = gifFrameCount;
+  hdr.frameSizeBytes = frameSize;
+  hdr.dataStartAddr = EXT_GIF_DATA_START;
+  hdr.totalDataBytes = totalBytes;
+
+  if (!extFlashStoreGifHeader(hdr))
+  {
+    return false;
+  }
+
+  return refreshExternalGifHeader();
 }
 
 bool pickRandomFlashImageFromActiveState()

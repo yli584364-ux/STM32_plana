@@ -34,15 +34,7 @@ static void handleNext()
     currentImageIndex = 0;
   }
 
-  if (useSdImages && useSdGifMode && gifSetCount > 0)
-  {
-    size_t idx = currentImageIndex % gifSetCount;
-    playGifFromSdFolder(gifSetFolders[idx].c_str());
-  }
-  else
-  {
-    showCurrentImage();
-  }
+  showCurrentImage();
 
   lastSwitchTime = millis();
   g_server->send(200, "text/plain", "OK");
@@ -61,15 +53,7 @@ static void handlePrev()
     currentImageIndex--;
   }
 
-  if (useSdImages && useSdGifMode && gifSetCount > 0)
-  {
-    size_t idx = currentImageIndex % gifSetCount;
-    playGifFromSdFolder(gifSetFolders[idx].c_str());
-  }
-  else
-  {
-    showCurrentImage();
-  }
+  showCurrentImage();
 
   lastSwitchTime = millis();
   g_server->send(200, "text/plain", "OK");
@@ -93,15 +77,7 @@ static void handleSet()
   }
 
   currentImageIndex = (size_t)idx;
-  if (useSdImages && useSdGifMode && gifSetCount > 0)
-  {
-    size_t gifIdx = currentImageIndex % gifSetCount;
-    playGifFromSdFolder(gifSetFolders[gifIdx].c_str());
-  }
-  else
-  {
-    showCurrentImage();
-  }
+  showCurrentImage();
 
   lastSwitchTime = millis();
   g_server->send(200, "text/plain", "OK");
@@ -137,12 +113,6 @@ static void handleState()
   activeFlashStateGroup = g;
   flashStateAutoRandomEnabled = true;
 
-  if (useSdImages)
-  {
-    g_server->send(200, "text/plain", stateNameOf(activeFlashStateGroup));
-    return;
-  }
-
   if (!pickRandomFlashImageFromActiveState())
   {
     flashStateAutoRandomEnabled = false;
@@ -175,25 +145,7 @@ static void handlePhotoToggle()
   }
 
   useSdImages = !useSdImages;
-  if (useSdImages)
-  {
-    if (useSdGifMode)
-    {
-      if (gifSetCount == 0)
-      {
-        scanGifSetsOnSd();
-      }
-      imageCount = gifSetCount;
-    }
-    else
-    {
-      imageCount = sdImageCount;
-    }
-  }
-  else
-  {
-    imageCount = planaImageCount;
-  }
+  imageCount = useSdImages ? sdImageCount : planaImageCount;
 
   if (imageCount == 0)
   {
@@ -211,68 +163,64 @@ static void handlePhotoToggle()
   g_server->send(200, "text/plain", useSdImages ? "SD" : "FLASH");
 }
 
+static void handleGifSourceToggle()
+{
+  flashStateAutoRandomEnabled = false;
+
+  useExternalFlashForGif = !useExternalFlashForGif;
+  if (useExternalFlashForGif && !extFlashGifReady)
+  {
+    useExternalFlashForGif = false;
+    g_server->send(200, "text/plain", "NO_EXT_GIF");
+    return;
+  }
+
+  g_server->send(200, "text/plain", useExternalFlashForGif ? "EXT_FLASH" : "ONBOARD_FLASH");
+}
+
 static void handleGif()
 {
   flashStateAutoRandomEnabled = false;
 
-  if (gifSetCount == 0)
+  if (useExternalFlashForGif)
   {
-    scanGifSetsOnSd();
-  }
-
-  if (gifSetCount == 0)
-  {
-    g_server->send(200, "text/plain", "NO_GIF_SET");
-    return;
-  }
-
-  size_t idx = 0;
-  if (g_server->hasArg("id"))
-  {
-    int id = g_server->arg("id").toInt();
-    if (id > 0)
+    if (!extFlashGifReady)
     {
-      idx = (size_t)(id - 1);
-      if (idx >= gifSetCount)
-      {
-        idx = gifSetCount - 1;
-      }
+      g_server->send(200, "text/plain", "NO_EXT_GIF");
+      return;
     }
+    playGifFromExternalFlash();
+  }
+  else
+  {
+    if (getOnboardGifFrameCount() == 0)
+    {
+      g_server->send(200, "text/plain", "NO_ONBOARD_GIF");
+      return;
+    }
+    playGifFromOnboardFlash();
   }
 
-  playGifFromSdFolder(gifSetFolders[idx].c_str());
   g_server->send(200, "text/plain", "GIF_OK");
 }
 
-static void handleSdModeToggle()
+static void handleGifSync()
 {
   flashStateAutoRandomEnabled = false;
 
-  if (!sdAvailable)
+  if (!extFlashAvailable)
   {
-    g_server->send(200, "text/plain", "NO_SD");
+    g_server->send(200, "text/plain", "NO_EXT_FLASH");
     return;
   }
 
-  useSdGifMode = !useSdGifMode;
-
-  if (useSdImages)
+  if (!syncGifDataToExternalFlash())
   {
-    if (useSdGifMode)
-    {
-      if (gifSetCount == 0)
-      {
-        scanGifSetsOnSd();
-      }
-      imageCount = gifSetCount;
-    }
-    else
-    {
-      imageCount = sdImageCount;
-    }
+    g_server->send(500, "text/plain", "SYNC_FAIL");
+    return;
   }
 
-  g_server->send(200, "text/plain", useSdGifMode ? "GIF" : "IMAGE");
+  g_server->send(200, "text/plain", "SYNC_OK");
 }
 
 void registerWebHandlers(WebServer &server)
@@ -285,6 +233,7 @@ void registerWebHandlers(WebServer &server)
   server.on("/set", HTTP_GET, handleSet);
   server.on("/state", HTTP_GET, handleState);
   server.on("/photo", HTTP_GET, handlePhotoToggle);
+  server.on("/gifsource", HTTP_GET, handleGifSourceToggle);
   server.on("/gif", HTTP_GET, handleGif);
-  server.on("/sdmode", HTTP_GET, handleSdModeToggle);
+  server.on("/gifsync", HTTP_GET, handleGifSync);
 }

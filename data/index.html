@@ -14,6 +14,7 @@
     .Photo_state_change { color: #eee; }
     .Photo_state_change.photo-flash { background: #555; }
     .Photo_state_change.photo-sd { background: #2e7d32; }
+    .photo-ext { background: #1565c0; }
     input[type="number"] { width: 5rem; padding: 0.6rem; border-radius: 6px; border: 1px solid #555; background:#222; color:#eee; }
   </style>
 </head>
@@ -37,10 +38,16 @@
   </div>
   <p id="stateHint" style="font-size:0.9rem;opacity:0.85;">当前：手动模式（不自动随机）</p>
   <div style="margin-top:1.5rem;">
-    <button id="photoToggleBtn" class="Photo_state_change photo-flash" onclick="togglePhotoMode()">Flash照片显示</button>
+    <button id="photoSourceBtn" class="Photo_state_change photo-flash" onclick="togglePhotoSource()">图片源：板载Flash</button>
+  </div>
+  <div style="margin-top:1.5rem;">
+    <button id="gifSourceBtn" class="Photo_state_change" onclick="toggleGifSource()" style="background:#5a3cb5;color:#fff;">GIF源：板载Flash</button>
   </div>
   <div style="margin-top:1rem;">
-    <button id="sdModeBtn" class="Photo_state_change" onclick="toggleSdGifMode()" style="background:#5a3cb5;color:#fff;">SD 图片模式</button>
+    <button id="gifSyncBtn" class="Photo_state_change" onclick="syncGifToExternalFlash()" style="background:#8d6e63;color:#fff;">同步gif_data到外部Flash</button>
+  </div>
+  <div style="margin-top:1rem;">
+    <button id="playGifBtn" class="Photo_state_change" onclick="playGifNow()" style="background:#00695c;color:#fff;">播放 GIF</button>
   </div>
   <div class="idx-input">
     <input id="idx" type="number" min="0" step="1" placeholder="索引" />
@@ -52,42 +59,69 @@
       fetch(path).catch(() => {});
     }
 
-    // 切换照片来源（Flash <-> SD）
-    function togglePhotoMode() {
-      // 通知设备切换照片来源
-      send('/photo');
-
-      const btn = document.getElementById('photoToggleBtn');
-      if (!btn) return;
-
-      const isFlash = btn.classList.contains('photo-flash');
-      if (isFlash) {
-        // 当前是 Flash -> 切到 SD 显示
-        btn.textContent = 'SD卡图片显示';
-        btn.classList.remove('photo-flash');
-        btn.classList.add('photo-sd');
-      } else {
-        // 当前是 SD -> 切回 Flash 显示
-        btn.textContent = 'Flash照片显示';
-        btn.classList.remove('photo-sd');
-        btn.classList.add('photo-flash');
-      }
-    }
-
-    // 切换 SD 卡普通图片模式 / SD 卡 GIF 模式
-    function toggleSdGifMode() {
-      fetch('/sdmode')
+    function togglePhotoSource() {
+      fetch('/photo')
         .then(r => r.text())
         .then(t => {
-          const btn = document.getElementById('sdModeBtn');
+          const btn = document.getElementById('photoSourceBtn');
           if (!btn) return;
-          if (t.trim() === 'GIF') {
-            btn.textContent = 'SD GIF 模式';
-          } else {
-            btn.textContent = 'SD 图片模式';
+          const v = t.trim();
+          if (v === 'SD' || v === 'SD_ONLY') {
+            btn.textContent = '图片源：SD卡';
+            btn.classList.remove('photo-flash');
+            btn.classList.add('photo-sd');
+          } else if (v === 'FLASH') {
+            btn.textContent = '图片源：板载Flash';
+            btn.classList.remove('photo-sd');
+            btn.classList.add('photo-flash');
+          } else if (v === 'NO_SD') {
+            btn.textContent = '未检测到SD卡';
           }
         })
         .catch(() => {});
+    }
+
+    function toggleGifSource() {
+      fetch('/gifsource')
+        .then(r => r.text())
+        .then(t => {
+          const btn = document.getElementById('gifSourceBtn');
+          if (!btn) return;
+          const v = t.trim();
+          if (v === 'EXT_FLASH') {
+            btn.textContent = 'GIF源：外部Flash';
+          } else if (v === 'ONBOARD_FLASH') {
+            btn.textContent = 'GIF源：板载Flash';
+          } else if (v === 'NO_EXT_GIF') {
+            btn.textContent = '外部Flash无GIF，仍用板载';
+          }
+        })
+        .catch(() => {});
+    }
+
+    function syncGifToExternalFlash() {
+      fetch('/gifsync')
+        .then(r => r.text())
+        .then(t => {
+          const btn = document.getElementById('gifSyncBtn');
+          if (!btn) return;
+          const v = t.trim();
+          if (v === 'SYNC_OK') {
+            btn.textContent = '同步成功';
+          } else if (v === 'NO_EXT_FLASH') {
+            btn.textContent = '未检测到外部Flash';
+          } else {
+            btn.textContent = '同步失败';
+          }
+          setTimeout(() => {
+            btn.textContent = '同步gif_data到外部Flash';
+          }, 1500);
+        })
+        .catch(() => {});
+    }
+
+    function playGifNow() {
+      fetch('/gif').catch(() => {});
     }
     function jump() {
       const v = document.getElementById('idx').value;// 索引不能为空
