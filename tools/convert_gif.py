@@ -11,6 +11,10 @@ TARGET_HEIGHT = 240
 # GIF 源文件名（位于工程根目录下的 photo/ 目录）
 GIF_NAME = "gif_test.gif"
 
+# 是否额外导出到 data/gif_data（用于板载 SPIFFS 播放）。
+# 240x240 RGB565 GIF 帧体积很大，默认关闭，避免 uploadfs 因空间不足失败。
+EXPORT_TO_SPIFFS = False
+
 
 def rgb888_to_rgb565(r: int, g: int, b: int) -> int:
     r5 = (r & 0xF8) >> 3
@@ -35,7 +39,8 @@ def save_frame_to_bin(frame: Image.Image, bin_path: Path) -> None:
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     photo_dir = root / "photo"
-    data_dir = root / "gif_data"
+    data_dir = root / "data" / "gif_data"
+    mirror_dir = root / "gif_data"
     include_dir = root / "include"
     src_dir = root / "src"
 
@@ -43,7 +48,9 @@ def main() -> None:
     if not gif_path.exists():
         raise FileNotFoundError(f"未找到 GIF 文件: {gif_path}")
 
-    data_dir.mkdir(parents=True, exist_ok=True)
+    mirror_dir.mkdir(parents=True, exist_ok=True)
+    if EXPORT_TO_SPIFFS:
+        data_dir.mkdir(parents=True, exist_ok=True)
     include_dir.mkdir(parents=True, exist_ok=True)
     src_dir.mkdir(parents=True, exist_ok=True)
 
@@ -53,10 +60,13 @@ def main() -> None:
     frame_index = 0
 
     for frame in ImageSequence.Iterator(img):
-        bin_name = f"/gif_f{frame_index}.bin"
+        bin_name = f"/gif_data/gif_f{frame_index}.bin"
         bin_path = data_dir / bin_name.lstrip("/")
-        print(f"转换 GIF 帧 {frame_index} -> {bin_path}")
-        save_frame_to_bin(frame, bin_path)
+        mirror_path = mirror_dir / f"gif_f{frame_index}.bin"
+        if EXPORT_TO_SPIFFS:
+            print(f"转换 GIF 帧 {frame_index} -> {bin_path}")
+            save_frame_to_bin(frame, bin_path)
+        save_frame_to_bin(frame, mirror_path)
         frame_bin_names.append(bin_name)
         frame_index += 1
 

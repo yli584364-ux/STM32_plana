@@ -5,6 +5,7 @@
 #include <SD.h>
 #include "SPIFFS.h"
 #include <stdlib.h>
+#include <esp_task_wdt.h>
 
 #include "pin.h"
 #include "plana.h"
@@ -39,6 +40,29 @@ static const uint32_t EXT_GIF_MAGIC = 0x31464745UL; // "EGF1"
 static const uint16_t EXT_GIF_VERSION = 1;
 static const uint32_t EXT_GIF_DATA_START = 4096;
 static ExternalGifHeader g_extGifHeader = {};
+static const uint8_t MAX_SYNC_GIF_FRAMES = 120;
+static String g_syncGifFramePaths[MAX_SYNC_GIF_FRAMES];
+static size_t g_syncGifFrameCount = 0;
+
+static void syncHeartbeatTick(size_t finishedFrames, size_t totalFrames)
+{
+  static unsigned long lastLogMs = 0;
+
+  // 喂狗并让出 CPU，避免长时间同步期间被判定为卡死。
+  esp_task_wdt_reset();
+  yield();
+  delay(1);
+
+  unsigned long now = millis();
+  if ((now - lastLogMs) >= 300)
+  {
+    Serial.print("GIF sync heartbeat: ");
+    Serial.print(finishedFrames);
+    Serial.print("/");
+    Serial.println(totalFrames);
+    lastLogMs = now;
+  }
+}
 
 static bool readNextArrayValue(File &f, uint16_t &out)
 {
@@ -382,11 +406,99 @@ size_t getOnboardGifFrameCount()
   return gifFrameCount;
 }
 
+static bool openGifFrameFromSpiffs(const char *path, File &outFile, String &openedPath)
+{
+  outFile = SPIFFS.open(path, "rb");
+  if (outFile)
+  {
+    openedPath = String(path);
+    return true;
+  }
+
+  String altPath = String("/gif_data") + String(path);
+  outFile = SPIFFS.open(altPath, "rb");
+  if (outFile)
+  {
+    openedPath = altPath;
+    return true;
+  }
+
+  return false;
+}
+
+static size_t scanGifFramesFromSdForSync()
+{
+  g_syncGifFrameCount = 0;
+
+  if (!sdAvailable)
+  {
+    return 0;
+  }
+
+  File dir = SD.open("/gif_data");
+  if (!dir || !dir.isDirectory())
+  {
+    return 0;
+  }
+
+  File file = dir.openNextFile();
+  while (file && g_syncGifFrameCount < MAX_SYNC_GIF_FRAMES)
+  {
+    if (!file.isDirectory())
+    {
+      String name = file.name();
+      if (!name.startsWith("/"))
+      {
+        name = String("/") + name;
+      }
+
+      String lower = name;
+      lower.toLowerCase();
+      if (lower.endsWith(".bin"))
+      {
+        g_syncGifFramePaths[g_syncGifFrameCount++] = name;
+      }
+    }
+    file = dir.openNextFile();
+  }
+
+  for (size_t i = 0; i + 1 < g_syncGifFrameCount; ++i)
+  {
+    for (size_t j = i + 1; j < g_syncGifFrameCount; ++j)
+    {
+      if (g_syncGifFramePaths[j] < g_syncGifFramePaths[i])
+      {
+        String t = g_syncGifFramePaths[i];
+        g_syncGifFramePaths[i] = g_syncGifFramePaths[j];
+        g_syncGifFramePaths[j] = t;
+      }
+    }
+  }
+
+  return g_syncGifFrameCount;
+}
+
 static bool drawGifFrameFromSpiffs(const char *path)
 {
-  File f = SPIFFS.open(path, "rb");
-  if (!f)
+  File f;
+  String openedPath;
+  if (!openGifFrameFromSpiffs(path, f, openedPath))
   {
+    Serial.print("GIF onboard: frame file not found: ");
+    Serial.println(path);
+    return false;
+  }
+
+  const size_t expectedSize = (size_t)planaWidth * (size_t)planaHeight * 2;
+  if (f.size() < expectedSize)
+  {
+    Serial.print("GIF onboard: frame file too small: ");
+    Serial.print(openedPath);
+    Serial.print(", size=");
+    Serial.print((size_t)f.size());
+    Serial.print(", expected=");
+    Serial.println(expectedSize);
+    f.close();
     return false;
   }
 
@@ -479,13 +591,18 @@ bool syncGifDataToExternalFlash()
   {
     return false;
   }
-  if (gifFrameCount == 0)
+
+  const size_t frameCountFromSd = scanGifFramesFromSdForSync();
+  const bool useSdSource = frameCountFromSd > 0;
+  const size_t sourceFrameCount = useSdSource ? frameCountFromSd : gifFrameCount;
+  if (sourceFrameCount == 0)
   {
+    Serial.println("GIF sync: no frame source from SD or onboard");
     return false;
   }
 
   const uint32_t frameSize = (uint32_t)planaWidth * (uint32_t)planaHeight * 2UL;
-  const uint32_t totalBytes = frameSize * (uint32_t)gifFrameCount;
+  const uint32_t totalBytes = frameSize * (uint32_t)sourceFrameCount;
   const uint32_t endAddr = EXT_GIF_DATA_START + totalBytes;
   if (endAddr > EXT_FLASH_TOTAL_BYTES)
   {
@@ -504,13 +621,30 @@ bool syncGifDataToExternalFlash()
   }
 
   uint32_t writeAddr = EXT_GIF_DATA_START;
-  for (size_t i = 0; i < gifFrameCount; ++i)
+  for (size_t i = 0; i < sourceFrameCount; ++i)
   {
-    File f = SPIFFS.open(gifFrames[i], "rb");
-    if (!f)
+    File f;
+    if (useSdSource)
     {
-      free(buf);
-      return false;
+      f = SD.open(g_syncGifFramePaths[i], "rb");
+      if (!f)
+      {
+        Serial.print("GIF sync: failed to open SD frame: ");
+        Serial.println(g_syncGifFramePaths[i]);
+        free(buf);
+        return false;
+      }
+    }
+    else
+    {
+      String openedPath;
+      if (!openGifFrameFromSpiffs(gifFrames[i], f, openedPath))
+      {
+        Serial.print("GIF sync: frame file not found: ");
+        Serial.println(gifFrames[i]);
+        free(buf);
+        return false;
+      }
     }
 
     uint32_t frameWritten = 0;
@@ -541,6 +675,7 @@ bool syncGifDataToExternalFlash()
     }
 
     f.close();
+    syncHeartbeatTick(i + 1, sourceFrameCount);
   }
 
   free(buf);
@@ -550,7 +685,7 @@ bool syncGifDataToExternalFlash()
   hdr.version = EXT_GIF_VERSION;
   hdr.width = planaWidth;
   hdr.height = planaHeight;
-  hdr.frameCount = gifFrameCount;
+  hdr.frameCount = (uint32_t)sourceFrameCount;
   hdr.frameSizeBytes = frameSize;
   hdr.dataStartAddr = EXT_GIF_DATA_START;
   hdr.totalDataBytes = totalBytes;
