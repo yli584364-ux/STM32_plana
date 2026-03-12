@@ -10,6 +10,41 @@
 
 static WebServer *g_server = nullptr;
 
+static bool updateExternalGifReady()
+{
+  if (!extFlashAvailable)
+  {
+    extFlashGifReady = false;
+    return false;
+  }
+
+  bool ready = refreshExternalGifHeader();
+  Serial.print("GIF status refresh: extFlashAvailable=");
+  Serial.print(extFlashAvailable ? "true" : "false");
+  Serial.print(", extFlashGifReady=");
+  Serial.println(ready ? "true" : "false");
+  return ready;
+}
+
+static void handleGifStatus()
+{
+  bool extReady = updateExternalGifReady();
+  bool onboardReady = isOnboardGifReady();
+
+  String body = "{";
+  body += "\"extFlashAvailable\":";
+  body += (extFlashAvailable ? "true" : "false");
+  body += ",\"extGifReady\":";
+  body += (extReady ? "true" : "false");
+  body += ",\"useExternal\":";
+  body += (useExternalFlashForGif ? "true" : "false");
+  body += ",\"onboardReady\":";
+  body += (onboardReady ? "true" : "false");
+  body += "}";
+
+  g_server->send(200, "application/json", body);
+}
+
 static void handleRoot()
 {
   File f = SPIFFS.open("/index.html", "r");
@@ -167,6 +202,32 @@ static void handleGifSourceToggle()
 {
   flashStateAutoRandomEnabled = false;
 
+  updateExternalGifReady();
+
+  String mode = g_server->hasArg("mode") ? g_server->arg("mode") : "toggle";
+  mode.trim();
+  mode.toLowerCase();
+
+  if (mode == "ext")
+  {
+    if (!extFlashGifReady)
+    {
+      useExternalFlashForGif = false;
+      g_server->send(200, "text/plain", "NO_EXT_GIF");
+      return;
+    }
+    useExternalFlashForGif = true;
+    g_server->send(200, "text/plain", "EXT_FLASH");
+    return;
+  }
+
+  if (mode == "onboard")
+  {
+    useExternalFlashForGif = false;
+    g_server->send(200, "text/plain", "ONBOARD_FLASH");
+    return;
+  }
+
   useExternalFlashForGif = !useExternalFlashForGif;
   if (useExternalFlashForGif && !extFlashGifReady)
   {
@@ -181,11 +242,20 @@ static void handleGifSourceToggle()
 static void handleGif()
 {
   flashStateAutoRandomEnabled = false;
+  updateExternalGifReady();
+
+  Serial.print("GIF play request: useExternal=");
+  Serial.print(useExternalFlashForGif ? "true" : "false");
+  Serial.print(", extReady=");
+  Serial.print(extFlashGifReady ? "true" : "false");
+  Serial.print(", onboardReady=");
+  Serial.println(isOnboardGifReady() ? "true" : "false");
 
   if (useExternalFlashForGif)
   {
     if (!extFlashGifReady)
     {
+      Serial.println("GIF play aborted: external GIF not ready");
       g_server->send(200, "text/plain", "NO_EXT_GIF");
       return;
     }
@@ -198,11 +268,13 @@ static void handleGif()
       if (extFlashGifReady)
       {
         useExternalFlashForGif = true;
+        Serial.println("GIF play fallback: switching to external flash");
         playGifFromExternalFlash();
         g_server->send(200, "text/plain", "FALLBACK_EXT");
         return;
       }
 
+      Serial.println("GIF play aborted: onboard and external GIF both unavailable");
       g_server->send(200, "text/plain", "NO_ONBOARD_GIF");
       return;
     }
@@ -215,21 +287,26 @@ static void handleGif()
 static void handleGifSync()
 {
   flashStateAutoRandomEnabled = false;
+  Serial.println("GIF sync request received");
 
   if (!extFlashAvailable)
   {
+    Serial.println("GIF sync aborted: external flash unavailable");
     g_server->send(200, "text/plain", "NO_EXT_FLASH");
     return;
   }
 
   if (!syncGifDataToExternalFlash())
   {
+    Serial.println("GIF sync failed");
     g_server->send(500, "text/plain", "SYNC_FAIL");
     return;
   }
 
+  updateExternalGifReady();
   useExternalFlashForGif = true;
-  g_server->send(200, "text/plain", "SYNC_OK_EXT");
+  Serial.println("GIF sync finished");
+  g_server->send(200, "text/plain", extFlashGifReady ? "SYNC_OK_EXT" : "SYNC_OK_BUT_NOT_READY");
 }
 
 void registerWebHandlers(WebServer &server)
@@ -243,6 +320,7 @@ void registerWebHandlers(WebServer &server)
   server.on("/state", HTTP_GET, handleState);
   server.on("/photo", HTTP_GET, handlePhotoToggle);
   server.on("/gifsource", HTTP_GET, handleGifSourceToggle);
+  server.on("/gifstatus", HTTP_GET, handleGifStatus);
   server.on("/gif", HTTP_GET, handleGif);
   server.on("/gifsync", HTTP_GET, handleGifSync);
 }
