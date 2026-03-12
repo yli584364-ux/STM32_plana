@@ -104,10 +104,12 @@
         .then(r => r.text())
         .then(t => {
           const btn = document.getElementById('gifSyncBtn');
+          const srcBtn = document.getElementById('gifSourceBtn');
           if (!btn) return;
           const v = t.trim();
-          if (v === 'SYNC_OK') {
+          if (v === 'SYNC_OK_EXT') {
             btn.textContent = '同步成功';
+            if (srcBtn) srcBtn.textContent = 'GIF源：外部Flash';
           } else if (v === 'NO_EXT_FLASH') {
             btn.textContent = '未检测到外部Flash';
           } else {
@@ -121,7 +123,16 @@
     }
 
     function playGifNow() {
-      fetch('/gif').catch(() => {});
+      fetch('/gif')
+        .then(r => r.text())
+        .then(t => {
+          const srcBtn = document.getElementById('gifSourceBtn');
+          if (!srcBtn) return;
+          if (t.trim() === 'FALLBACK_EXT') {
+            srcBtn.textContent = 'GIF源：外部Flash（自动回退）';
+          }
+        })
+        .catch(() => {});
     }
     function jump() {
       const v = document.getElementById('idx').value;// 索引不能为空

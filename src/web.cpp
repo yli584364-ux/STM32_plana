@@ -193,8 +193,16 @@ static void handleGif()
   }
   else
   {
-    if (getOnboardGifFrameCount() == 0)
+    if (!isOnboardGifReady())
     {
+      if (extFlashGifReady)
+      {
+        useExternalFlashForGif = true;
+        playGifFromExternalFlash();
+        g_server->send(200, "text/plain", "FALLBACK_EXT");
+        return;
+      }
+
       g_server->send(200, "text/plain", "NO_ONBOARD_GIF");
       return;
     }
@@ -220,7 +228,8 @@ static void handleGifSync()
     return;
   }
 
-  g_server->send(200, "text/plain", "SYNC_OK");
+  useExternalFlashForGif = true;
+  g_server->send(200, "text/plain", "SYNC_OK_EXT");
 }
 
 void registerWebHandlers(WebServer &server)

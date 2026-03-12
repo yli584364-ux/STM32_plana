@@ -43,6 +43,7 @@ static ExternalGifHeader g_extGifHeader = {};
 static const uint8_t MAX_SYNC_GIF_FRAMES = 120;
 static String g_syncGifFramePaths[MAX_SYNC_GIF_FRAMES];
 static size_t g_syncGifFrameCount = 0;
+static bool openGifFrameFromSpiffs(const char *path, File &outFile, String &openedPath);
 
 static void syncHeartbeatTick(size_t finishedFrames, size_t totalFrames)
 {
@@ -406,6 +407,26 @@ size_t getOnboardGifFrameCount()
   return gifFrameCount;
 }
 
+bool isOnboardGifReady()
+{
+  if (gifFrameCount == 0)
+  {
+    return false;
+  }
+
+  File f;
+  String openedPath;
+  if (!openGifFrameFromSpiffs(gifFrames[0], f, openedPath))
+  {
+    return false;
+  }
+
+  const size_t expectedSize = (size_t)planaWidth * (size_t)planaHeight * 2;
+  bool ok = ((size_t)f.size() >= expectedSize);
+  f.close();
+  return ok;
+}
+
 static bool openGifFrameFromSpiffs(const char *path, File &outFile, String &openedPath)
 {
   outFile = SPIFFS.open(path, "rb");
@@ -545,9 +566,9 @@ static bool drawGifFrameFromExternal(size_t frameIndex)
 
 void playGifFromOnboardFlash()
 {
-  if (gifFrameCount == 0)
+  if (!isOnboardGifReady())
   {
-    Serial.println("GIF onboard: no frames");
+    Serial.println("GIF onboard: source not ready");
     return;
   }
 
