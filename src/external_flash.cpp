@@ -7,24 +7,47 @@
 namespace
 {
   SPIClass g_extFlashSpi(HSPI);
+  SPISettings g_extFlashSpiSettings(EXT_FLASH_SPI_FREQ, MSBFIRST, SPI_MODE0);
 
   static const uint8_t CMD_READ_STATUS = 0x05;
   static const uint8_t CMD_WRITE_ENABLE = 0x06;
   static const uint8_t CMD_READ_DATA = 0x03;
   static const uint8_t CMD_PAGE_PROGRAM = 0x02;
   static const uint8_t CMD_SECTOR_ERASE_4K = 0x20;
+  static const uint8_t CMD_JEDEC_ID = 0x9F;
 
   static const uint32_t SECTOR_SIZE = 4096;
   static const uint32_t PAGE_SIZE = 256;
 
   void extFlashSelect()
   {
+    g_extFlashSpi.beginTransaction(g_extFlashSpiSettings);
     digitalWrite(EXT_FLASH_CS, LOW);
   }
 
   void extFlashDeselect()
   {
     digitalWrite(EXT_FLASH_CS, HIGH);
+    g_extFlashSpi.endTransaction();
+  }
+
+  void extFlashSendAddr24(uint32_t addr)
+  {
+    g_extFlashSpi.transfer((uint8_t)((addr >> 16) & 0xFF));
+    g_extFlashSpi.transfer((uint8_t)((addr >> 8) & 0xFF));
+    g_extFlashSpi.transfer((uint8_t)(addr & 0xFF));
+  }
+
+  uint32_t extFlashReadJedecIdRaw()
+  {
+    extFlashSelect();
+    g_extFlashSpi.transfer(CMD_JEDEC_ID);
+    uint32_t id = 0;
+    id |= ((uint32_t)g_extFlashSpi.transfer(0x00) << 16);
+    id |= ((uint32_t)g_extFlashSpi.transfer(0x00) << 8);
+    id |= (uint32_t)g_extFlashSpi.transfer(0x00);
+    extFlashDeselect();
+    return id;
   }
 
   uint8_t extFlashReadStatusRaw()
@@ -60,20 +83,24 @@ namespace
     g_extFlashSpi.transfer(CMD_WRITE_ENABLE);
     extFlashDeselect();
   }
-
-  void extFlashSendAddr24(uint32_t addr)
-  {
-    g_extFlashSpi.transfer((uint8_t)((addr >> 16) & 0xFF));
-    g_extFlashSpi.transfer((uint8_t)((addr >> 8) & 0xFF));
-    g_extFlashSpi.transfer((uint8_t)(addr & 0xFF));
-  }
 }
 
 bool extFlashBegin()
 {
   pinMode(EXT_FLASH_CS, OUTPUT);
-  extFlashDeselect();
+  digitalWrite(EXT_FLASH_CS, HIGH);
   g_extFlashSpi.begin(EXT_FLASH_SCK, EXT_FLASH_MISO, EXT_FLASH_MOSI, EXT_FLASH_CS);
+
+  uint32_t jedecId = extFlashReadJedecIdRaw();
+  Serial.print("External flash JEDEC ID: 0x");
+  Serial.println(jedecId, HEX);
+
+  if (jedecId == 0x000000UL || jedecId == 0xFFFFFFUL)
+  {
+    Serial.println("External flash JEDEC ID invalid");
+    return false;
+  }
+
   return extFlashWaitReady(200);
 }
 

@@ -59,6 +59,28 @@
       fetch(path).catch(() => {});
     }
 
+    function refreshGifStatus() {
+      fetch('/gifstatus')
+        .then(r => r.json())
+        .then(status => {
+          const srcBtn = document.getElementById('gifSourceBtn');
+          const playBtn = document.getElementById('playGifBtn');
+          if (srcBtn) {
+            if (status.useExternal && status.extGifReady) {
+              srcBtn.textContent = 'GIF源：外部Flash';
+            } else if (!status.useExternal) {
+              srcBtn.textContent = status.onboardReady ? 'GIF源：板载Flash' : 'GIF源：板载Flash（不可用）';
+            } else {
+              srcBtn.textContent = '外部Flash无GIF';
+            }
+          }
+          if (playBtn) {
+            playBtn.textContent = '播放 GIF';
+          }
+        })
+        .catch(() => {});
+    }
+
     function togglePhotoSource() {
       fetch('/photo')
         .then(r => r.text())
@@ -95,6 +117,7 @@
           } else if (v === 'NO_EXT_GIF') {
             btn.textContent = '外部Flash无GIF，仍用板载';
           }
+          refreshGifStatus();
         })
         .catch(() => {});
     }
@@ -104,15 +127,20 @@
         .then(r => r.text())
         .then(t => {
           const btn = document.getElementById('gifSyncBtn');
+          const srcBtn = document.getElementById('gifSourceBtn');
           if (!btn) return;
           const v = t.trim();
-          if (v === 'SYNC_OK') {
+          if (v === 'SYNC_OK_EXT') {
             btn.textContent = '同步成功';
+            if (srcBtn) srcBtn.textContent = 'GIF源：外部Flash';
+          } else if (v === 'SYNC_OK_BUT_NOT_READY') {
+            btn.textContent = '同步完成但未就绪';
           } else if (v === 'NO_EXT_FLASH') {
             btn.textContent = '未检测到外部Flash';
           } else {
             btn.textContent = '同步失败';
           }
+          refreshGifStatus();
           setTimeout(() => {
             btn.textContent = '同步gif_data到外部Flash';
           }, 1500);
@@ -121,7 +149,27 @@
     }
 
     function playGifNow() {
-      fetch('/gif').catch(() => {});
+      fetch('/gif')
+        .then(r => r.text())
+        .then(t => {
+          const srcBtn = document.getElementById('gifSourceBtn');
+          const playBtn = document.getElementById('playGifBtn');
+          const v = t.trim();
+          if (srcBtn && v === 'FALLBACK_EXT') {
+            srcBtn.textContent = 'GIF源：外部Flash（自动回退）';
+          }
+          if (playBtn) {
+            if (v === 'NO_EXT_GIF') {
+              playBtn.textContent = '外部Flash无GIF';
+            } else if (v === 'NO_ONBOARD_GIF') {
+              playBtn.textContent = '没有可播放的GIF';
+            } else {
+              playBtn.textContent = '播放 GIF';
+            }
+          }
+          refreshGifStatus();
+        })
+        .catch(() => {});
     }
     function jump() {
       const v = document.getElementById('idx').value;// 索引不能为空
@@ -149,6 +197,8 @@
         })
         .catch(() => {});
     }
+
+    refreshGifStatus();
   </script>
 </body>
 </html>

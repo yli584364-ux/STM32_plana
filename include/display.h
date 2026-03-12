@@ -42,6 +42,7 @@ void scanSdImages();
 void showCurrentImage();
 
 size_t getOnboardGifFrameCount();
+bool isOnboardGifReady();
 void playGifFromOnboardFlash();
 void playGifFromExternalFlash();
 bool syncGifDataToExternalFlash();

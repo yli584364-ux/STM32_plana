@@ -43,6 +43,7 @@ static ExternalGifHeader g_extGifHeader = {};
 static const uint8_t MAX_SYNC_GIF_FRAMES = 120;
 static String g_syncGifFramePaths[MAX_SYNC_GIF_FRAMES];
 static size_t g_syncGifFrameCount = 0;
+static bool openGifFrameFromSpiffs(const char *path, File &outFile, String &openedPath);
 
 static void syncHeartbeatTick(size_t finishedFrames, size_t totalFrames)
 {
@@ -406,6 +407,26 @@ size_t getOnboardGifFrameCount()
   return gifFrameCount;
 }
 
+bool isOnboardGifReady()
+{
+  if (gifFrameCount == 0)
+  {
+    return false;
+  }
+
+  File f;
+  String openedPath;
+  if (!openGifFrameFromSpiffs(gifFrames[0], f, openedPath))
+  {
+    return false;
+  }
+
+  const size_t expectedSize = (size_t)planaWidth * (size_t)planaHeight * 2;
+  bool ok = ((size_t)f.size() >= expectedSize);
+  f.close();
+  return ok;
+}
+
 static bool openGifFrameFromSpiffs(const char *path, File &outFile, String &openedPath)
 {
   outFile = SPIFFS.open(path, "rb");
@@ -545,9 +566,9 @@ static bool drawGifFrameFromExternal(size_t frameIndex)
 
 void playGifFromOnboardFlash()
 {
-  if (gifFrameCount == 0)
+  if (!isOnboardGifReady())
   {
-    Serial.println("GIF onboard: no frames");
+    Serial.println("GIF onboard: source not ready");
     return;
   }
 
@@ -606,17 +627,20 @@ bool syncGifDataToExternalFlash()
   const uint32_t endAddr = EXT_GIF_DATA_START + totalBytes;
   if (endAddr > EXT_FLASH_TOTAL_BYTES)
   {
+    Serial.println("GIF sync: data exceeds external flash capacity");
     return false;
   }
 
   if (!extFlashEraseRange(0, EXT_GIF_DATA_START + totalBytes))
   {
+    Serial.println("GIF sync: erase range failed");
     return false;
   }
 
   uint8_t *buf = (uint8_t *)malloc(1024);
   if (!buf)
   {
+    Serial.println("GIF sync: buffer malloc failed");
     return false;
   }
 
@@ -658,6 +682,10 @@ bool syncGifDataToExternalFlash()
       size_t got = f.read(buf, need);
       if (got != need)
       {
+        Serial.print("GIF sync: source read failed at frame ");
+        Serial.print(i);
+        Serial.print(", offset=");
+        Serial.println(frameWritten);
         f.close();
         free(buf);
         return false;
@@ -665,6 +693,10 @@ bool syncGifDataToExternalFlash()
 
       if (!extFlashWriteBytes(writeAddr, buf, got))
       {
+        Serial.print("GIF sync: flash write failed at frame ");
+        Serial.print(i);
+        Serial.print(", addr=0x");
+        Serial.println(writeAddr, HEX);
         f.close();
         free(buf);
         return false;
@@ -692,10 +724,19 @@ bool syncGifDataToExternalFlash()
 
   if (!extFlashStoreGifHeader(hdr))
   {
+    Serial.println("GIF sync: header write failed");
     return false;
   }
 
-  return refreshExternalGifHeader();
+  if (!refreshExternalGifHeader())
+  {
+    Serial.println("GIF sync: header validation failed after write");
+    return false;
+  }
+
+  Serial.print("GIF sync: header validated, frameCount=");
+  Serial.println(sourceFrameCount);
+  return true;
 }
 
 bool pickRandomFlashImageFromActiveState()
