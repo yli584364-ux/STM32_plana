@@ -6,9 +6,22 @@
 #include "SPIFFS.h"
 
 #include "display.h"
+#include "display_commands.h"
 #include "plana.h"
 
 static WebServer *g_server = nullptr;
+static QueueHandle_t g_displayCmdQueue = nullptr;
+
+static bool pushDisplayCommand(DisplayCommandFlag flag, int32_t value = 0)
+{
+  if (!g_displayCmdQueue)
+  {
+    return false;
+  }
+
+  DisplayCommand cmd = {flag, value};
+  return xQueueSend(g_displayCmdQueue, &cmd, 0) == pdTRUE;
+}
 
 static bool updateExternalGifReady()
 {
@@ -61,43 +74,26 @@ static void handleRoot()
 
 static void handleNext()
 {
-  flashStateAutoRandomEnabled = false;
-
-  currentImageIndex++;
-  if (currentImageIndex >= imageCount)
+  if (!pushDisplayCommand(DISPLAY_CMD_NEXT))
   {
-    currentImageIndex = 0;
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
   }
-
-  showCurrentImage();
-
-  lastSwitchTime = millis();
-  g_server->send(200, "text/plain", "OK");
+  g_server->send(200, "text/plain", "QUEUED");
 }
 
 static void handlePrev()
 {
-  flashStateAutoRandomEnabled = false;
-
-  if (currentImageIndex == 0)
+  if (!pushDisplayCommand(DISPLAY_CMD_PREV))
   {
-    currentImageIndex = (imageCount == 0 ? 0 : imageCount - 1);
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
   }
-  else
-  {
-    currentImageIndex--;
-  }
-
-  showCurrentImage();
-
-  lastSwitchTime = millis();
-  g_server->send(200, "text/plain", "OK");
+  g_server->send(200, "text/plain", "QUEUED");
 }
 
 static void handleSet()
 {
-  flashStateAutoRandomEnabled = false;
-
   if (!g_server->hasArg("i"))
   {
     g_server->send(400, "text/plain", "missing i");
@@ -111,11 +107,13 @@ static void handleSet()
     return;
   }
 
-  currentImageIndex = (size_t)idx;
-  showCurrentImage();
+  if (!pushDisplayCommand(DISPLAY_CMD_SET_INDEX, idx))
+  {
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
+  }
 
-  lastSwitchTime = millis();
-  g_server->send(200, "text/plain", "OK");
+  g_server->send(200, "text/plain", "QUEUED");
 }
 
 static void handleState()
@@ -132,9 +130,12 @@ static void handleState()
 
   if (name == "off" || name == "manual")
   {
-    flashStateAutoRandomEnabled = false;
-    activeFlashStateGroup = FLASH_STATE_ALL;
-    g_server->send(200, "text/plain", "OFF");
+    if (!pushDisplayCommand(DISPLAY_CMD_STATE_OFF))
+    {
+      g_server->send(503, "text/plain", "QUEUE_FULL");
+      return;
+    }
+    g_server->send(200, "text/plain", "QUEUED");
     return;
   }
 
@@ -145,173 +146,110 @@ static void handleState()
     return;
   }
 
-  activeFlashStateGroup = g;
-  flashStateAutoRandomEnabled = true;
-
-  if (!pickRandomFlashImageFromActiveState())
+  if (!pushDisplayCommand(DISPLAY_CMD_STATE_SET, (int32_t)g))
   {
-    flashStateAutoRandomEnabled = false;
-    g_server->send(404, "text/plain", "NO_STATE_IMAGE");
+    g_server->send(503, "text/plain", "QUEUE_FULL");
     return;
   }
 
-  g_server->send(200, "text/plain", stateNameOf(activeFlashStateGroup));
+  g_server->send(200, "text/plain", "QUEUED");
 }
 
 static void handlePhotoToggle()
 {
-  flashStateAutoRandomEnabled = false;
-
-  if (!sdAvailable || sdImageCount == 0)
+  if (!pushDisplayCommand(DISPLAY_CMD_PHOTO_TOGGLE))
   {
-    g_server->send(200, "text/plain", "NO_SD");
+    g_server->send(503, "text/plain", "QUEUE_FULL");
     return;
   }
+  g_server->send(200, "text/plain", "QUEUED");
+}
 
-  if (planaImageCount == 0)
-  {
-    useSdImages = true;
-    imageCount = sdImageCount;
-    currentImageIndex %= imageCount;
-    showCurrentImage();
-    lastSwitchTime = millis();
-    g_server->send(200, "text/plain", "SD_ONLY");
-    return;
-  }
+static void handlePhotoStatus()
+{
+  String body = "{";
+  body += "\"sdAvailable\":";
+  body += (sdAvailable ? "true" : "false");
+  body += ",\"sdImageCount\":";
+  body += String((unsigned long)sdImageCount);
+  body += ",\"useSdImages\":";
+  body += (useSdImages ? "true" : "false");
+  body += ",\"imageCount\":";
+  body += String((unsigned long)imageCount);
+  body += "}";
 
-  useSdImages = !useSdImages;
-  imageCount = useSdImages ? sdImageCount : planaImageCount;
-
-  if (imageCount == 0)
-  {
-    g_server->send(200, "text/plain", "NO_IMG");
-    return;
-  }
-
-  if (currentImageIndex >= imageCount)
-  {
-    currentImageIndex = 0;
-  }
-
-  showCurrentImage();
-  lastSwitchTime = millis();
-  g_server->send(200, "text/plain", useSdImages ? "SD" : "FLASH");
+  g_server->send(200, "application/json", body);
 }
 
 static void handleGifSourceToggle()
 {
-  flashStateAutoRandomEnabled = false;
-
-  updateExternalGifReady();
-
   String mode = g_server->hasArg("mode") ? g_server->arg("mode") : "toggle";
   mode.trim();
   mode.toLowerCase();
 
   if (mode == "ext")
   {
-    if (!extFlashGifReady)
+    if (!pushDisplayCommand(DISPLAY_CMD_GIFSOURCE_EXT))
     {
-      useExternalFlashForGif = false;
-      g_server->send(200, "text/plain", "NO_EXT_GIF");
+      g_server->send(503, "text/plain", "QUEUE_FULL");
       return;
     }
-    useExternalFlashForGif = true;
-    g_server->send(200, "text/plain", "EXT_FLASH");
+    g_server->send(200, "text/plain", "QUEUED");
     return;
   }
 
   if (mode == "onboard")
   {
-    useExternalFlashForGif = false;
-    g_server->send(200, "text/plain", "ONBOARD_FLASH");
+    if (!pushDisplayCommand(DISPLAY_CMD_GIFSOURCE_ONBOARD))
+    {
+      g_server->send(503, "text/plain", "QUEUE_FULL");
+      return;
+    }
+    g_server->send(200, "text/plain", "QUEUED");
     return;
   }
 
-  useExternalFlashForGif = !useExternalFlashForGif;
-  if (useExternalFlashForGif && !extFlashGifReady)
+  if (mode != "toggle")
   {
-    useExternalFlashForGif = false;
-    g_server->send(200, "text/plain", "NO_EXT_GIF");
+    g_server->send(400, "text/plain", "invalid mode");
     return;
   }
 
-  g_server->send(200, "text/plain", useExternalFlashForGif ? "EXT_FLASH" : "ONBOARD_FLASH");
+  if (!pushDisplayCommand(DISPLAY_CMD_GIFSOURCE_TOGGLE))
+  {
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
+  }
+
+  g_server->send(200, "text/plain", "QUEUED");
 }
 
 static void handleGif()
 {
-  flashStateAutoRandomEnabled = false;
-  updateExternalGifReady();
-
-  Serial.print("GIF play request: useExternal=");
-  Serial.print(useExternalFlashForGif ? "true" : "false");
-  Serial.print(", extReady=");
-  Serial.print(extFlashGifReady ? "true" : "false");
-  Serial.print(", onboardReady=");
-  Serial.println(isOnboardGifReady() ? "true" : "false");
-
-  if (useExternalFlashForGif)
+  if (!pushDisplayCommand(DISPLAY_CMD_PLAY_GIF))
   {
-    if (!extFlashGifReady)
-    {
-      Serial.println("GIF play aborted: external GIF not ready");
-      g_server->send(200, "text/plain", "NO_EXT_GIF");
-      return;
-    }
-    playGifFromExternalFlash();
-  }
-  else
-  {
-    if (!isOnboardGifReady())
-    {
-      if (extFlashGifReady)
-      {
-        useExternalFlashForGif = true;
-        Serial.println("GIF play fallback: switching to external flash");
-        playGifFromExternalFlash();
-        g_server->send(200, "text/plain", "FALLBACK_EXT");
-        return;
-      }
-
-      Serial.println("GIF play aborted: onboard and external GIF both unavailable");
-      g_server->send(200, "text/plain", "NO_ONBOARD_GIF");
-      return;
-    }
-    playGifFromOnboardFlash();
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
   }
 
-  g_server->send(200, "text/plain", "GIF_OK");
+  g_server->send(200, "text/plain", "QUEUED");
 }
 
 static void handleGifSync()
 {
-  flashStateAutoRandomEnabled = false;
-  Serial.println("GIF sync request received");
-
-  if (!extFlashAvailable)
+  if (!pushDisplayCommand(DISPLAY_CMD_SYNC_GIF))
   {
-    Serial.println("GIF sync aborted: external flash unavailable");
-    g_server->send(200, "text/plain", "NO_EXT_FLASH");
+    g_server->send(503, "text/plain", "QUEUE_FULL");
     return;
   }
 
-  if (!syncGifDataToExternalFlash())
-  {
-    Serial.println("GIF sync failed");
-    g_server->send(500, "text/plain", "SYNC_FAIL");
-    return;
-  }
-
-  updateExternalGifReady();
-  useExternalFlashForGif = true;
-  Serial.println("GIF sync finished");
-  g_server->send(200, "text/plain", extFlashGifReady ? "SYNC_OK_EXT" : "SYNC_OK_BUT_NOT_READY");
+  g_server->send(200, "text/plain", "QUEUED");
 }
 
-void registerWebHandlers(WebServer &server)
+void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue)
 {
   g_server = &server;
+  g_displayCmdQueue = displayCommandQueue;
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/next", HTTP_GET, handleNext);
@@ -319,6 +257,7 @@ void registerWebHandlers(WebServer &server)
   server.on("/set", HTTP_GET, handleSet);
   server.on("/state", HTTP_GET, handleState);
   server.on("/photo", HTTP_GET, handlePhotoToggle);
+  server.on("/photostatus", HTTP_GET, handlePhotoStatus);
   server.on("/gifsource", HTTP_GET, handleGifSourceToggle);
   server.on("/gifstatus", HTTP_GET, handleGifStatus);
   server.on("/gif", HTTP_GET, handleGif);

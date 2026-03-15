@@ -83,21 +83,36 @@
 
     function togglePhotoSource() {
       fetch('/photo')
-        .then(r => r.text())
-        .then(t => {
+        .then(() => {
+          // display 端异步处理队列命令，稍后拉取状态。
+          setTimeout(refreshPhotoStatus, 80);
+          setTimeout(refreshPhotoStatus, 250);
+        })
+        .catch(() => {});
+    }
+
+    function refreshPhotoStatus() {
+      fetch('/photostatus')
+        .then(r => r.json())
+        .then(status => {
           const btn = document.getElementById('photoSourceBtn');
           if (!btn) return;
-          const v = t.trim();
-          if (v === 'SD' || v === 'SD_ONLY') {
+
+          if (!status.sdAvailable || Number(status.sdImageCount || 0) === 0) {
+            btn.textContent = '未检测到SD卡';
+            btn.classList.remove('photo-sd');
+            btn.classList.add('photo-flash');
+            return;
+          }
+
+          if (status.useSdImages) {
             btn.textContent = '图片源：SD卡';
             btn.classList.remove('photo-flash');
             btn.classList.add('photo-sd');
-          } else if (v === 'FLASH') {
+          } else {
             btn.textContent = '图片源：板载Flash';
             btn.classList.remove('photo-sd');
             btn.classList.add('photo-flash');
-          } else if (v === 'NO_SD') {
-            btn.textContent = '未检测到SD卡';
           }
         })
         .catch(() => {});
@@ -199,6 +214,7 @@
     }
 
     refreshGifStatus();
+    refreshPhotoStatus();
   </script>
 </body>
 </html>

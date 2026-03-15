@@ -1,0 +1,24 @@
+#pragma once
+
+#include <stdint.h>
+
+enum DisplayCommandFlag : uint8_t
+{
+  DISPLAY_CMD_NEXT = 0,
+  DISPLAY_CMD_PREV,
+  DISPLAY_CMD_SET_INDEX,
+  DISPLAY_CMD_STATE_OFF,
+  DISPLAY_CMD_STATE_SET,
+  DISPLAY_CMD_PHOTO_TOGGLE,
+  DISPLAY_CMD_GIFSOURCE_TOGGLE,
+  DISPLAY_CMD_GIFSOURCE_EXT,
+  DISPLAY_CMD_GIFSOURCE_ONBOARD,
+  DISPLAY_CMD_PLAY_GIF,
+  DISPLAY_CMD_SYNC_GIF,
+};
+
+struct DisplayCommand
+{
+  DisplayCommandFlag flag;
+  int32_t value;
+};
