@@ -65,48 +65,11 @@ static void syncHeartbeatTick(size_t finishedFrames, size_t totalFrames)
   }
 }
 
-static bool readNextArrayValue(File &f, uint16_t &out)
-{
-  char token[16];
-  size_t len = 0;
-  bool inToken = false;
-
-  while (f.available())
-  {
-    char c = (char)f.read();
-    bool isTokenChar = ((c >= '0' && c <= '9') ||
-                        (c >= 'a' && c <= 'f') ||
-                        (c >= 'A' && c <= 'F') ||
-                        c == 'x' || c == 'X');
-
-    if (isTokenChar)
-    {
-      if (len < sizeof(token) - 1)
-      {
-        token[len++] = c;
-      }
-      inToken = true;
-    }
-    else if (inToken)
-    {
-      break;
-    }
-  }
-
-  if (!inToken)
-  {
-    return false;
-  }
-
-  token[len] = '\0';
-  out = (uint16_t)(strtoul(token, nullptr, 0) & 0xFFFFUL);
-  return true;
-}
-
-static bool drawArrImageFromFile(File &f)
+static bool drawBinImageFromFile(File &f)
 {
   const uint16_t chunkRows = 10;
-  const size_t totalPixels = (size_t)planaWidth * (size_t)planaHeight;
+  const size_t bytesPerRow = (size_t)planaWidth * 2;
+  const size_t totalBytes = bytesPerRow * (size_t)planaHeight;
   const size_t chunkPixels = (size_t)planaWidth * (size_t)chunkRows;
 
   uint16_t *chunkBuf = (uint16_t *)malloc(chunkPixels * sizeof(uint16_t));
@@ -116,13 +79,21 @@ static bool drawArrImageFromFile(File &f)
     return false;
   }
 
-  bool parseOk = true;
-  size_t parsedCount = 0;
+  if ((size_t)f.size() < totalBytes)
+  {
+    Serial.print("SD image: BIN file too small, size=");
+    Serial.print((size_t)f.size());
+    Serial.print(", expected=");
+    Serial.println(totalBytes);
+    free(chunkBuf);
+    return false;
+  }
+
   uint16_t y = 0;
 
   tft.fillScreen(ST77XX_BLACK);
 
-  while (y < planaHeight && parseOk)
+  while (y < planaHeight)
   {
     uint16_t rowsThisChunk = (uint16_t)(planaHeight - y);
     if (rowsThisChunk > chunkRows)
@@ -130,21 +101,16 @@ static bool drawArrImageFromFile(File &f)
       rowsThisChunk = chunkRows;
     }
 
-    size_t pixelsThisChunk = (size_t)planaWidth * (size_t)rowsThisChunk;
-
-    for (size_t i = 0; i < pixelsThisChunk; ++i)
+    size_t bytesThisChunk = bytesPerRow * (size_t)rowsThisChunk;
+    size_t got = f.read((uint8_t *)chunkBuf, bytesThisChunk);
+    if (got != bytesThisChunk)
     {
-      if (!readNextArrayValue(f, chunkBuf[i]))
-      {
-        parseOk = false;
-        break;
-      }
-      parsedCount++;
-    }
-
-    if (!parseOk)
-    {
-      break;
+      Serial.print("SD image: BIN read failed, got=");
+      Serial.print(got);
+      Serial.print(", expected=");
+      Serial.println(bytesThisChunk);
+      free(chunkBuf);
+      return false;
     }
 
     tft.drawRGBBitmap(0, y, chunkBuf, planaWidth, rowsThisChunk);
@@ -152,16 +118,6 @@ static bool drawArrImageFromFile(File &f)
   }
 
   free(chunkBuf);
-
-  if (!parseOk || parsedCount != totalPixels)
-  {
-    Serial.print("SD image: array value count mismatch, parsed=");
-    Serial.print(parsedCount);
-    Serial.print(", expected=");
-    Serial.println(totalPixels);
-    return false;
-  }
-
   return true;
 }
 
@@ -330,7 +286,7 @@ void scanSdImages()
       }
       String lower = name;
       lower.toLowerCase();
-      if (lower.endsWith(".arr"))
+      if (lower.endsWith(".bin"))
       {
         sdImageNames[sdImageCount++] = name;
         Serial.print("Found SD image: ");
@@ -356,16 +312,16 @@ void showCurrentImage()
   if (useSdImages && sdAvailable && sdImageCount > 0)
   {
     String path = sdImageNames[currentImageIndex % sdImageCount];
-    File f = SD.open(path, "r");
+    File f = SD.open(path, "rb");
     if (!f)
     {
       Serial.print("Failed to open SD image file: ");
       Serial.println(path);
       return;
     }
-    if (!drawArrImageFromFile(f))
+    if (!drawBinImageFromFile(f))
     {
-      Serial.println("Failed to draw SD ARR image");
+      Serial.println("Failed to draw SD BIN image");
     }
     f.close();
     return;

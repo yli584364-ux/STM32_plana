@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from PIL import Image
@@ -9,7 +8,7 @@ import struct
 TARGET_WIDTH = 240
 TARGET_HEIGHT = 240
 
-# 最多转换多少张图片（比如 6 = 只取前 6 张 jpg）
+# 最多转换多少张图片
 MAX_IMAGES = 100
 
 
@@ -36,57 +35,38 @@ def save_image_to_bin(src_path: Path, bin_path: Path) -> None:
             f.write(struct.pack("<H", value))
 
 
-def save_image_to_arr(src_path: Path, arr_path: Path) -> None:
-    """把一张图片转换成 RGB565 数组文本，并写入 .arr 文件。"""
-    img = Image.open(src_path).convert("RGB")
-    resample = Image.Resampling.BILINEAR  # Pillow >= 9
-    img = img.resize((TARGET_WIDTH, TARGET_HEIGHT), resample)
-    pixels = [(int(r), int(g), int(b)) for (r, g, b) in img.getdata()]
-
-    values = [rgb888_to_rgb565(r, g, b) for (r, g, b) in pixels]
-
-    with open(arr_path, "w", encoding="utf-8") as f:
-        # 每行固定数量便于查看，解析器按分隔符读取，不依赖具体换行
-        per_line = 16
-        for i in range(0, len(values), per_line):
-            chunk = values[i : i + per_line]
-            line = ", ".join(f"0x{v:04X}" for v in chunk)
-            if i + per_line < len(values):
-                f.write(line + ",\n")
-            else:
-                f.write(line + "\n")
-
-
 def main():
     root = Path(__file__).resolve().parents[1]
     photo_dir = root / "photo_for_sd"
-    out_path = root / "include" / "plana.h"
-    data_dir = root / "data"
-    sd_arr_dir = root / "sd_arrays"
+    sd_bin_dir = root / "sd_arrays"
 
     jpg_list = sorted(photo_dir.glob("*.jpg"))
     if not jpg_list:
         raise FileNotFoundError(f"在 {photo_dir} 下面没有找到任何 .jpg 文件")
 
-    # 只保留前 MAX_IMAGES 张，避免图片太多导致程序体积超出 Flash
+    # 只保留前 MAX_IMAGES 张，避免过多文件导致管理困难
     if len(jpg_list) > MAX_IMAGES:
         jpg_list = jpg_list[:MAX_IMAGES]
 
-    # 确保 SPIFFS 数据目录存在（PlatformIO 默认使用 data/ 上传到 SPIFFS）
-    data_dir.mkdir(parents=True, exist_ok=True)
-    # 生成给 SD 卡使用的数组文本目录
-    sd_arr_dir.mkdir(parents=True, exist_ok=True)
+    # 生成给 SD 卡使用的二进制目录
+    sd_bin_dir.mkdir(parents=True, exist_ok=True)
+
+    # 清理旧的 bin 文件，避免残留索引影响显示顺序
+    for old_bin in sd_bin_dir.glob("*.bin"):
+        old_bin.unlink()
 
     bin_files: list[str] = []
 
     for idx, path in enumerate(jpg_list):
-        arr_name = f"img_{idx}.arr"
-        arr_path = sd_arr_dir / arr_name
-        print(f"转换图片 {path.name} -> {arr_path}")
-        save_image_to_arr(path, arr_path)
+        bin_name = f"img_{idx}.bin"
+        bin_path = sd_bin_dir / bin_name
+        print(f"转换图片 {path.name} -> {bin_path}")
+        save_image_to_bin(path, bin_path)
+        bin_files.append(bin_name)
 
-    print(f"生成完成: {out_path}，共 {len(bin_files)} 张图片")
-    print(f"SD 数组文件目录: {sd_arr_dir}（将其中 .arr 复制到 SD 卡根目录）")
+    print(f"生成完成，共 {len(bin_files)} 张 BIN 图片")
+    print(f"SD 图片目录: {sd_bin_dir}")
+    print("请将 .bin 文件复制到 SD 卡根目录。")
 
 
 if __name__ == "__main__":
