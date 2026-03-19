@@ -203,6 +203,44 @@ static void applyDisplayCommand(const DisplayCommand &cmd)
     Serial.println("GIF sync finished");
     return;
 
+  case DISPLAY_CMD_PLAY_SD_GIF:
+  {
+    if (!sdAvailable)
+    {
+      Serial.println("GIF SD play aborted: SD unavailable");
+      return;
+    }
+
+    int32_t idxValue = cmd.value;
+    size_t gifCount = getSdGifCount();
+    if (gifCount == 0)
+    {
+      scanSdGifFolders();
+      gifCount = getSdGifCount();
+    }
+    if (gifCount == 0)
+    {
+      Serial.println("GIF SD play aborted: no gif folders");
+      return;
+    }
+
+    size_t target = 0;
+    if (idxValue < 0)
+    {
+      target = getSdGifActiveIndex();
+    }
+    else
+    {
+      target = (size_t)idxValue;
+    }
+
+    if (!playGifFromSd(target))
+    {
+      Serial.println("GIF SD play failed");
+    }
+    return;
+  }
+
   default:
     return;
   }
@@ -315,6 +353,7 @@ void setup()
   {
     sdAvailable = true;
     scanSdImages();
+    scanSdGifFolders();
   }
   else
   {

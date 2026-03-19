@@ -246,6 +246,53 @@ static void handleGifSync()
   g_server->send(200, "text/plain", "QUEUED");
 }
 
+static void handleSdGifStatus()
+{
+  if (sdAvailable)
+  {
+    scanSdGifFolders();
+  }
+
+  size_t gifCount = getSdGifCount();
+  size_t activeIndex = getSdGifActiveIndex();
+  size_t activeFrameCount = getSdGifFrameCount(activeIndex);
+
+  String body = "{";
+  body += "\"sdAvailable\":";
+  body += (sdAvailable ? "true" : "false");
+  body += ",\"gifCount\":";
+  body += String((unsigned long)gifCount);
+  body += ",\"activeIndex\":";
+  body += String((unsigned long)activeIndex);
+  body += ",\"activeFrameCount\":";
+  body += String((unsigned long)activeFrameCount);
+  body += "}";
+
+  g_server->send(200, "application/json", body);
+}
+
+static void handleSdGifPlay()
+{
+  int32_t idx = -1;
+  if (g_server->hasArg("i"))
+  {
+    idx = (int32_t)g_server->arg("i").toInt();
+    if (idx < 0)
+    {
+      g_server->send(400, "text/plain", "invalid i");
+      return;
+    }
+  }
+
+  if (!pushDisplayCommand(DISPLAY_CMD_PLAY_SD_GIF, idx))
+  {
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
+  }
+
+  g_server->send(200, "text/plain", "QUEUED");
+}
+
 void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue)
 {
   g_server = &server;
@@ -262,4 +309,6 @@ void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue)
   server.on("/gifstatus", HTTP_GET, handleGifStatus);
   server.on("/gif", HTTP_GET, handleGif);
   server.on("/gifsync", HTTP_GET, handleGifSync);
+  server.on("/sdgifstatus", HTTP_GET, handleSdGifStatus);
+  server.on("/sdgifplay", HTTP_GET, handleSdGifPlay);
 }

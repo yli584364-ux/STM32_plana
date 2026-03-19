@@ -31,6 +31,14 @@ FlashStateGroup activeFlashStateGroup = FLASH_STATE_ALL;
 const uint8_t MAX_SD_IMAGES = 64;
 String sdImageNames[MAX_SD_IMAGES];
 size_t sdImageCount = 0;
+static const uint8_t MAX_SD_GIFS = 16;
+static const uint16_t MAX_SD_GIF_FRAMES = 180;
+static String g_sdGifFolderNames[MAX_SD_GIFS];
+static size_t g_sdGifFrameCounts[MAX_SD_GIFS] = {0};
+static size_t g_sdGifCount = 0;
+static size_t g_sdGifActiveIndex = 0;
+static String g_sdGifFramePaths[MAX_SD_GIF_FRAMES];
+static size_t g_sdGifFramePathCount = 0;
 
 const size_t MAX_FLASH_GROUP_IMAGES = 64;
 static size_t flashStateGroupCounts[FLASH_STATE_COUNT] = {0};
@@ -44,6 +52,19 @@ static const uint8_t MAX_SYNC_GIF_FRAMES = 120;
 static String g_syncGifFramePaths[MAX_SYNC_GIF_FRAMES];
 static size_t g_syncGifFrameCount = 0;
 static bool openGifFrameFromSpiffs(const char *path, File &outFile, String &openedPath);
+
+static bool isSdGifFolder(const String &path)
+{
+  String lower = path;
+  lower.toLowerCase();
+  return lower.startsWith("/gif_");
+}
+
+static bool isBinFileName(String name)
+{
+  name.toLowerCase();
+  return name.endsWith(".bin");
+}
 
 static void syncHeartbeatTick(size_t finishedFrames, size_t totalFrames)
 {
@@ -297,6 +318,97 @@ void scanSdImages()
   }
 }
 
+void scanSdGifFolders()
+{
+  g_sdGifCount = 0;
+
+  if (!sdAvailable)
+  {
+    return;
+  }
+
+  File root = SD.open("/");
+  if (!root)
+  {
+    Serial.println("Failed to open SD root for gif scan");
+    return;
+  }
+
+  File item = root.openNextFile();
+  while (item && g_sdGifCount < MAX_SD_GIFS)
+  {
+    if (item.isDirectory())
+    {
+      String folder = item.name();
+      if (!folder.startsWith("/"))
+      {
+        folder = String("/") + folder;
+      }
+
+      if (isSdGifFolder(folder))
+      {
+        size_t frameCount = 0;
+        File dir = SD.open(folder);
+        if (dir && dir.isDirectory())
+        {
+          File f = dir.openNextFile();
+          while (f)
+          {
+            if (!f.isDirectory())
+            {
+              String name = f.name();
+              if (isBinFileName(name))
+              {
+                ++frameCount;
+              }
+            }
+            f = dir.openNextFile();
+          }
+        }
+
+        if (frameCount > 0)
+        {
+          g_sdGifFolderNames[g_sdGifCount] = folder;
+          g_sdGifFrameCounts[g_sdGifCount] = frameCount;
+          ++g_sdGifCount;
+          Serial.print("Found SD GIF folder: ");
+          Serial.print(folder);
+          Serial.print(", frames=");
+          Serial.println(frameCount);
+        }
+      }
+    }
+
+    item = root.openNextFile();
+  }
+
+  for (size_t i = 0; i + 1 < g_sdGifCount; ++i)
+  {
+    for (size_t j = i + 1; j < g_sdGifCount; ++j)
+    {
+      if (g_sdGifFolderNames[j] < g_sdGifFolderNames[i])
+      {
+        String nameTmp = g_sdGifFolderNames[i];
+        g_sdGifFolderNames[i] = g_sdGifFolderNames[j];
+        g_sdGifFolderNames[j] = nameTmp;
+
+        size_t countTmp = g_sdGifFrameCounts[i];
+        g_sdGifFrameCounts[i] = g_sdGifFrameCounts[j];
+        g_sdGifFrameCounts[j] = countTmp;
+      }
+    }
+  }
+
+  if (g_sdGifCount == 0)
+  {
+    g_sdGifActiveIndex = 0;
+  }
+  else if (g_sdGifActiveIndex >= g_sdGifCount)
+  {
+    g_sdGifActiveIndex = 0;
+  }
+}
+
 void showCurrentImage()
 {
   if (imageCount == 0)
@@ -455,6 +567,55 @@ static size_t scanGifFramesFromSdForSync()
   return g_syncGifFrameCount;
 }
 
+static size_t scanFramesInSdGifFolder(size_t gifIndex)
+{
+  g_sdGifFramePathCount = 0;
+
+  if (!sdAvailable || g_sdGifCount == 0 || gifIndex >= g_sdGifCount)
+  {
+    return 0;
+  }
+
+  File dir = SD.open(g_sdGifFolderNames[gifIndex]);
+  if (!dir || !dir.isDirectory())
+  {
+    return 0;
+  }
+
+  File file = dir.openNextFile();
+  while (file && g_sdGifFramePathCount < MAX_SD_GIF_FRAMES)
+  {
+    if (!file.isDirectory())
+    {
+      String name = file.name();
+      if (isBinFileName(name))
+      {
+        if (!name.startsWith("/"))
+        {
+          name = g_sdGifFolderNames[gifIndex] + String("/") + name;
+        }
+        g_sdGifFramePaths[g_sdGifFramePathCount++] = name;
+      }
+    }
+    file = dir.openNextFile();
+  }
+
+  for (size_t i = 0; i + 1 < g_sdGifFramePathCount; ++i)
+  {
+    for (size_t j = i + 1; j < g_sdGifFramePathCount; ++j)
+    {
+      if (g_sdGifFramePaths[j] < g_sdGifFramePaths[i])
+      {
+        String t = g_sdGifFramePaths[i];
+        g_sdGifFramePaths[i] = g_sdGifFramePaths[j];
+        g_sdGifFramePaths[j] = t;
+      }
+    }
+  }
+
+  return g_sdGifFramePathCount;
+}
+
 static bool drawGifFrameFromSpiffs(const char *path)
 {
   File f;
@@ -560,6 +721,57 @@ void playGifFromExternalFlash()
     }
     delay(frameDelayMs);
   }
+}
+
+bool playGifFromSd(size_t gifIndex)
+{
+  scanSdGifFolders();
+
+  if (!sdAvailable || g_sdGifCount == 0)
+  {
+    Serial.println("GIF SD: no available gif folders");
+    return false;
+  }
+
+  if (gifIndex >= g_sdGifCount)
+  {
+    Serial.println("GIF SD: gif index out of range");
+    return false;
+  }
+
+  size_t frameCount = scanFramesInSdGifFolder(gifIndex);
+  if (frameCount == 0)
+  {
+    Serial.println("GIF SD: no frames in selected folder");
+    return false;
+  }
+
+  g_sdGifActiveIndex = gifIndex;
+
+  const uint16_t frameDelayMs = 80;
+  for (size_t i = 0; i < frameCount; ++i)
+  {
+    File f = SD.open(g_sdGifFramePaths[i], "rb");
+    if (!f)
+    {
+      Serial.print("GIF SD: failed to open frame file: ");
+      Serial.println(g_sdGifFramePaths[i]);
+      return false;
+    }
+
+    if (!drawBinImageFromFile(f))
+    {
+      Serial.print("GIF SD: failed to draw frame file: ");
+      Serial.println(g_sdGifFramePaths[i]);
+      f.close();
+      return false;
+    }
+
+    f.close();
+    delay(frameDelayMs);
+  }
+
+  return true;
 }
 
 bool syncGifDataToExternalFlash()
@@ -714,4 +926,23 @@ bool pickRandomFlashImageFromActiveState()
   lastSwitchTime = millis();
   lastFlashStateRandomSwitchTime = lastSwitchTime;
   return true;
+}
+
+size_t getSdGifCount()
+{
+  return g_sdGifCount;
+}
+
+size_t getSdGifActiveIndex()
+{
+  return g_sdGifActiveIndex;
+}
+
+size_t getSdGifFrameCount(size_t gifIndex)
+{
+  if (gifIndex >= g_sdGifCount)
+  {
+    return 0;
+  }
+  return g_sdGifFrameCounts[gifIndex];
 }

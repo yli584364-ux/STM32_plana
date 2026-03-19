@@ -38,6 +38,7 @@ FlashStateGroup parseStateName(const String &name);
 const char *stateNameOf(FlashStateGroup group);
 void buildFlashStateGroups();
 void scanSdImages();
+void scanSdGifFolders();
 
 void showCurrentImage();
 
@@ -45,7 +46,12 @@ size_t getOnboardGifFrameCount();
 bool isOnboardGifReady();
 void playGifFromOnboardFlash();
 void playGifFromExternalFlash();
+bool playGifFromSd(size_t gifIndex);
 bool syncGifDataToExternalFlash();
 bool refreshExternalGifHeader();
+
+size_t getSdGifCount();
+size_t getSdGifActiveIndex();
+size_t getSdGifFrameCount(size_t gifIndex);
 
 bool pickRandomFlashImageFromActiveState();

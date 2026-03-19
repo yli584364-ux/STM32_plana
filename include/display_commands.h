@@ -15,6 +15,7 @@ enum DisplayCommandFlag : uint8_t
   DISPLAY_CMD_GIFSOURCE_ONBOARD,
   DISPLAY_CMD_PLAY_GIF,
   DISPLAY_CMD_SYNC_GIF,
+  DISPLAY_CMD_PLAY_SD_GIF,
 };
 
 struct DisplayCommand

@@ -49,6 +49,11 @@
   <div style="margin-top:1rem;">
     <button id="playGifBtn" class="Photo_state_change" onclick="playGifNow()" style="background:#00695c;color:#fff;">播放 GIF</button>
   </div>
+  <div style="margin-top:1rem;">
+    <input id="sdGifIdx" type="number" min="0" step="1" placeholder="SD GIF索引" />
+    <button id="playSdGifBtn" class="Photo_state_change" onclick="playSdGifNow()" style="background:#00838f;color:#fff;">播放SD GIF</button>
+  </div>
+  <p id="sdGifHint" style="font-size:0.9rem;opacity:0.8;">SD GIF：未检测</p>
   <div class="idx-input">
     <input id="idx" type="number" min="0" step="1" placeholder="索引" />
     <button onclick="jump()">跳转</button>
@@ -186,6 +191,49 @@
         })
         .catch(() => {});
     }
+
+    function refreshSdGifStatus() {
+      fetch('/sdgifstatus')
+        .then(r => r.json())
+        .then(status => {
+          const hint = document.getElementById('sdGifHint');
+          if (!hint) return;
+
+          if (!status.sdAvailable) {
+            hint.textContent = 'SD GIF：未检测到SD卡';
+            return;
+          }
+
+          const count = Number(status.gifCount || 0);
+          if (count <= 0) {
+            hint.textContent = 'SD GIF：未发现 gif_0/gif_1... 目录';
+            return;
+          }
+
+          const activeIndex = Number(status.activeIndex || 0);
+          const activeFrameCount = Number(status.activeFrameCount || 0);
+          hint.textContent = 'SD GIF：共 ' + count + ' 组，当前 ' + activeIndex + '，帧数 ' + activeFrameCount;
+        })
+        .catch(() => {});
+    }
+
+    function playSdGifNow() {
+      const raw = document.getElementById('sdGifIdx')?.value;
+      const query = (raw === undefined || raw === null || raw === '') ? '' : ('?i=' + encodeURIComponent(raw));
+      fetch('/sdgifplay' + query)
+        .then(() => {
+          const btn = document.getElementById('playSdGifBtn');
+          if (btn) {
+            btn.textContent = '已提交播放';
+            setTimeout(() => {
+              btn.textContent = '播放SD GIF';
+            }, 900);
+          }
+          setTimeout(refreshSdGifStatus, 120);
+        })
+        .catch(() => {});
+    }
+
     function jump() {
       const v = document.getElementById('idx').value;// 索引不能为空
       if (v === '') return;// 索引不能为空
@@ -215,6 +263,7 @@
 
     refreshGifStatus();
     refreshPhotoStatus();
+    refreshSdGifStatus();
   </script>
 </body>
 </html>

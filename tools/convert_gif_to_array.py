@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PIL import Image, ImageSequence
 
-from convert_plana_to_array import rgb888_to_rgb565, TARGET_WIDTH, TARGET_HEIGHT
+from tools.convert_plana_to_sd import rgb888_to_rgb565, TARGET_WIDTH, TARGET_HEIGHT
 
 
 def save_gif_to_arr_frames(gif_path: Path, out_dir: Path, max_frames: int | None = None) -> None:
