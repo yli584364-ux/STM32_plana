@@ -34,12 +34,16 @@ extern const uint8_t MAX_SD_IMAGES;
 extern String sdImageNames[];
 extern size_t sdImageCount;
 
+typedef bool (*GifPlaybackInterruptChecker)();
+
 FlashStateGroup parseStateName(const String &name);
 const char *stateNameOf(FlashStateGroup group);
 void buildFlashStateGroups();
 void scanSdImages();
 
 void showCurrentImage();
+
+void setGifPlaybackInterruptChecker(GifPlaybackInterruptChecker checker);
 
 size_t getOnboardGifFrameCount();
 bool isOnboardGifReady();

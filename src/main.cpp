@@ -24,6 +24,36 @@ BluetoothSerial SerialBT;
 
 WebServer server(80);
 static QueueHandle_t g_displayCommandQueue = nullptr;
+static bool g_hasDeferredDisplayCommand = false;
+static DisplayCommand g_deferredDisplayCommand = {DISPLAY_CMD_NEXT, 0};
+
+static bool shouldInterruptGifPlaybackFromQueue()
+{
+  if (!g_displayCommandQueue)
+  {
+    return false;
+  }
+
+  if (g_hasDeferredDisplayCommand)
+  {
+    return true;
+  }
+
+  DisplayCommand pendingCmd;
+  if (xQueueReceive(g_displayCommandQueue, &pendingCmd, 0) != pdTRUE)
+  {
+    return false;
+  }
+
+  if (pendingCmd.flag == DISPLAY_CMD_PLAY_GIF)
+  {
+    return false;
+  }
+
+  g_deferredDisplayCommand = pendingCmd;
+  g_hasDeferredDisplayCommand = true;
+  return true;
+}
 
 static void applyDisplayCommand(const DisplayCommand &cmd)
 {
@@ -231,6 +261,13 @@ static void displayTask(void *arg)
       continue;
     }
 
+    if (g_hasDeferredDisplayCommand)
+    {
+      DisplayCommand deferredCmd = g_deferredDisplayCommand;
+      g_hasDeferredDisplayCommand = false;
+      applyDisplayCommand(deferredCmd);
+    }
+
     while (xQueueReceive(g_displayCommandQueue, &cmd, 0) == pdTRUE)
     {
       applyDisplayCommand(cmd);
@@ -360,6 +397,10 @@ void setup()
   if (!g_displayCommandQueue)
   {
     Serial.println("Failed to create display command queue");
+  }
+  else
+  {
+    setGifPlaybackInterruptChecker(shouldInterruptGifPlaybackFromQueue);
   }
 
   registerWebHandlers(server, g_displayCommandQueue);

@@ -31,6 +31,7 @@ FlashStateGroup activeFlashStateGroup = FLASH_STATE_ALL;
 const uint8_t MAX_SD_IMAGES = 64;
 String sdImageNames[MAX_SD_IMAGES];
 size_t sdImageCount = 0;
+static GifPlaybackInterruptChecker g_gifPlaybackInterruptChecker = nullptr;
 
 const size_t MAX_FLASH_GROUP_IMAGES = 64;
 static size_t flashStateGroupCounts[FLASH_STATE_COUNT] = {0};
@@ -44,6 +45,16 @@ static const uint8_t MAX_SYNC_GIF_FRAMES = 120;
 static String g_syncGifFramePaths[MAX_SYNC_GIF_FRAMES];
 static size_t g_syncGifFrameCount = 0;
 static bool openGifFrameFromSpiffs(const char *path, File &outFile, String &openedPath);
+
+static bool shouldInterruptGifPlayback()
+{
+  return g_gifPlaybackInterruptChecker && g_gifPlaybackInterruptChecker();
+}
+
+void setGifPlaybackInterruptChecker(GifPlaybackInterruptChecker checker)
+{
+  g_gifPlaybackInterruptChecker = checker;
+}
 
 static void syncHeartbeatTick(size_t finishedFrames, size_t totalFrames)
 {
@@ -529,15 +540,24 @@ void playGifFromOnboardFlash()
   }
 
   const uint16_t frameDelayMs = 80;
-  for (size_t i = 0; i < gifFrameCount; ++i)
+  while (true)
   {
-    if (!drawGifFrameFromSpiffs(gifFrames[i]))
+    for (size_t i = 0; i < gifFrameCount; ++i)
     {
-      Serial.print("GIF onboard: failed frame ");
-      Serial.println(i);
-      return;
+      if (shouldInterruptGifPlayback())
+      {
+        Serial.println("GIF onboard: interrupted by command");
+        return;
+      }
+
+      if (!drawGifFrameFromSpiffs(gifFrames[i]))
+      {
+        Serial.print("GIF onboard: failed frame ");
+        Serial.println(i);
+        return;
+      }
+      delay(frameDelayMs);
     }
-    delay(frameDelayMs);
   }
 }
 
@@ -550,15 +570,24 @@ void playGifFromExternalFlash()
   }
 
   const uint16_t frameDelayMs = 80;
-  for (size_t i = 0; i < g_extGifHeader.frameCount; ++i)
+  while (true)
   {
-    if (!drawGifFrameFromExternal(i))
+    for (size_t i = 0; i < g_extGifHeader.frameCount; ++i)
     {
-      Serial.print("GIF external: failed frame ");
-      Serial.println(i);
-      return;
+      if (shouldInterruptGifPlayback())
+      {
+        Serial.println("GIF external: interrupted by command");
+        return;
+      }
+
+      if (!drawGifFrameFromExternal(i))
+      {
+        Serial.print("GIF external: failed frame ");
+        Serial.println(i);
+        return;
+      }
+      delay(frameDelayMs);
     }
-    delay(frameDelayMs);
   }
 }
 
