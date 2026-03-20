@@ -8,7 +8,7 @@
 
 // SD 卡 SPI 片选引脚（SCK/MOSI/MISO 复用 VSPI: 18/23/19）
 // 如果与其他外设冲突，请按实际接线修改
-#define SD_CS 26
+#define SD_CS 32
 static const uint32_t SD_SPI_FREQ = 10000000; // 10MHz，优先稳定性
 
 // 外接 SPI NOR Flash（128Mbit = 16MB）引脚
@@ -19,8 +19,4 @@ static const uint32_t SD_SPI_FREQ = 10000000; // 10MHz，优先稳定性
 #define EXT_FLASH_MOSI 13
 static const uint32_t EXT_FLASH_SPI_FREQ = 20000000; // 20MHz
 
-// I2S 音频输出引脚（WAV 播放）
-// 请按你的解码板/功放接线修改
-#define AUDIO_I2S_BCLK 25
-#define AUDIO_I2S_LRCK 33
-#define AUDIO_I2S_DOUT 32
+// 外部功放板控制引脚（如有） GPIO 25 - 连接功放板的 EN 或类似控制引脚  GND - 连接功放板的 GND

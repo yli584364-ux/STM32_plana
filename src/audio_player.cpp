@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include <AudioFileSourceSD.h>
+#include <AudioFileSourceBuffer.h>
 #include <AudioGeneratorWAV.h>
 #include <AudioOutputI2S.h>
 
@@ -18,6 +19,7 @@ static int g_trackIndex = -1;
 
 static AudioGeneratorWAV *g_wav = nullptr;
 static AudioFileSourceSD *g_source = nullptr;
+static AudioFileSourceBuffer *g_sourceBuffer = nullptr;
 static AudioOutputI2S *g_output = nullptr;
 
 static portMUX_TYPE g_audioStateMux = portMUX_INITIALIZER_UNLOCKED;
@@ -59,6 +61,12 @@ static void stopPlayback()
     g_source = nullptr;
   }
 
+  if (g_sourceBuffer)
+  {
+    delete g_sourceBuffer;
+    g_sourceBuffer = nullptr;
+  }
+
   if (g_output)
   {
     delete g_output;
@@ -93,9 +101,23 @@ static bool scanMusicFolder()
     if (!entry.isDirectory())
     {
       String path = String(entry.name());
-      if (!path.startsWith("/"))
+
+      // Some SD implementations return only basename from openNextFile(),
+      // others return full path. Normalize to absolute /music/... path.
+      if (!path.startsWith("/music/"))
       {
-        path = String("/") + path;
+        if (path.startsWith("music/"))
+        {
+          path = String("/") + path;
+        }
+        else if (path.startsWith("/"))
+        {
+          path = String("/music") + path;
+        }
+        else
+        {
+          path = String("/music/") + path;
+        }
       }
 
       if (endsWithIgnoreCase(path, ".wav"))
@@ -148,12 +170,21 @@ static bool startCurrentTrack()
 
   const String &trackPath = g_playlist[(size_t)g_trackIndex];
   g_source = new AudioFileSourceSD(trackPath.c_str());
-  g_output = new AudioOutputI2S();
-  g_output->SetPinout(AUDIO_I2S_BCLK, AUDIO_I2S_LRCK, AUDIO_I2S_DOUT);
+  g_sourceBuffer = new AudioFileSourceBuffer(g_source, 8192);
+  if (!g_sourceBuffer)
+  {
+    Serial.println("Failed to allocate audio source buffer");
+    stopPlayback();
+    return false;
+  }
+
+  // Use ESP32 internal DAC output mode, no external I2S DAC required.
+  g_output = new AudioOutputI2S(0, AudioOutputI2S::INTERNAL_DAC, 24, AudioOutputI2S::APLL_ENABLE);
+  g_output->SetOutputModeMono(true);
   g_output->SetGain(0.2f);
 
   g_wav = new AudioGeneratorWAV();
-  if (!g_wav->begin(g_source, g_output))
+  if (!g_wav->begin(g_sourceBuffer, g_output))
   {
     Serial.print("Failed to play WAV: ");
     Serial.println(trackPath);
@@ -316,6 +347,13 @@ void audioTask(void *arg)
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(2));
+    if (g_isPlaying)
+    {
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    else
+    {
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
   }
 }

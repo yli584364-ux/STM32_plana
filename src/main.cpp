@@ -424,7 +424,7 @@ void setup()
   {
     Serial.println("Failed to create display_task");
   }
-  if (xTaskCreatePinnedToCore(audioTask, "audio_task", 8192, g_audioCommandQueue, 1, nullptr, 1) != pdPASS)
+  if (xTaskCreatePinnedToCore(audioTask, "audio_task", 12288, g_audioCommandQueue, 3, nullptr, 0) != pdPASS)
   {
     Serial.println("Failed to create audio_task");
   }
