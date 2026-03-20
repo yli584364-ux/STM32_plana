@@ -49,6 +49,16 @@
   <div style="margin-top:1rem;">
     <button id="playGifBtn" class="Photo_state_change" onclick="playGifNow()" style="background:#00695c;color:#fff;">播放 GIF</button>
   </div>
+  <div style="margin-top:1.5rem;padding:0.8rem;border:1px solid #444;border-radius:8px;max-width:520px;margin-left:auto;margin-right:auto;">
+    <div style="font-weight:600;margin-bottom:0.6rem;">SD 音乐控制（/music/*.wav）</div>
+    <div>
+      <button class="prev" onclick="musicPrev()">上一首</button>
+      <button class="next" onclick="musicPlay()">播放</button>
+      <button class="prev" onclick="musicPause()">暂停</button>
+      <button class="next" onclick="musicNext()">下一首</button>
+    </div>
+    <p id="musicStatus" style="font-size:0.9rem;opacity:0.9;margin-top:0.6rem;">音乐状态：读取中...</p>
+  </div>
   <div class="idx-input">
     <input id="idx" type="number" min="0" step="1" placeholder="索引" />
     <button onclick="jump()">跳转</button>
@@ -186,6 +196,57 @@
         })
         .catch(() => {});
     }
+
+    function refreshMusicStatus() {
+      fetch('/music/status')
+        .then(r => r.json())
+        .then(status => {
+          const label = document.getElementById('musicStatus');
+          if (!label) return;
+
+          if (!status.sdReady) {
+            label.textContent = '音乐状态：SD 卡不可用';
+            return;
+          }
+
+          if (Number(status.trackCount || 0) === 0) {
+            label.textContent = '音乐状态：/music 目录未找到 WAV';
+            return;
+          }
+
+          const index = Number(status.trackIndex || 0) + 1;
+          const total = Number(status.trackCount || 0);
+          const name = status.trackName || '(未知)';
+          const state = status.playing ? '播放中' : '已暂停';
+          label.textContent = `音乐状态：${state} | ${index}/${total} | ${name}`;
+        })
+        .catch(() => {});
+    }
+
+    function musicPlay() {
+      fetch('/music/play')
+        .then(() => setTimeout(refreshMusicStatus, 80))
+        .catch(() => {});
+    }
+
+    function musicPause() {
+      fetch('/music/pause')
+        .then(() => setTimeout(refreshMusicStatus, 80))
+        .catch(() => {});
+    }
+
+    function musicNext() {
+      fetch('/music/next')
+        .then(() => setTimeout(refreshMusicStatus, 80))
+        .catch(() => {});
+    }
+
+    function musicPrev() {
+      fetch('/music/prev')
+        .then(() => setTimeout(refreshMusicStatus, 80))
+        .catch(() => {});
+    }
+
     function jump() {
       const v = document.getElementById('idx').value;// 索引不能为空
       if (v === '') return;// 索引不能为空
@@ -215,6 +276,8 @@
 
     refreshGifStatus();
     refreshPhotoStatus();
+    refreshMusicStatus();
+    setInterval(refreshMusicStatus, 1500);
   </script>
 </body>
 </html>

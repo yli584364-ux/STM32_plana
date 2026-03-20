@@ -14,6 +14,7 @@
 #include "web.h"
 #include "plana.h"
 #include "external_flash.h"
+#include "audio_player.h"
 
 #define ENABLE_BLUETOOTH 0
 
@@ -24,6 +25,7 @@ BluetoothSerial SerialBT;
 
 WebServer server(80);
 static QueueHandle_t g_displayCommandQueue = nullptr;
+static QueueHandle_t g_audioCommandQueue = nullptr;
 static bool g_hasDeferredDisplayCommand = false;
 static DisplayCommand g_deferredDisplayCommand = {DISPLAY_CMD_NEXT, 0};
 
@@ -358,6 +360,8 @@ void setup()
     Serial.println("SD card initialization failed");
   }
 
+  initAudioPlayer(sdAvailable);
+
   extFlashAvailable = extFlashBegin();
   if (extFlashAvailable)
   {
@@ -394,6 +398,7 @@ void setup()
   WiFi.softAP(ssid, password);
 
   g_displayCommandQueue = xQueueCreate(16, sizeof(DisplayCommand));
+  g_audioCommandQueue = xQueueCreate(8, sizeof(AudioCommand));
   if (!g_displayCommandQueue)
   {
     Serial.println("Failed to create display command queue");
@@ -403,7 +408,12 @@ void setup()
     setGifPlaybackInterruptChecker(shouldInterruptGifPlaybackFromQueue);
   }
 
-  registerWebHandlers(server, g_displayCommandQueue);
+  if (!g_audioCommandQueue)
+  {
+    Serial.println("Failed to create audio command queue");
+  }
+
+  registerWebHandlers(server, g_displayCommandQueue, g_audioCommandQueue);
   server.begin();
 
   if (xTaskCreatePinnedToCore(webTask, "web_task", 4096, nullptr, 2, nullptr, 0) != pdPASS)
@@ -413,6 +423,10 @@ void setup()
   if (xTaskCreatePinnedToCore(displayTask, "display_task", 6144, nullptr, 2, nullptr, 1) != pdPASS)
   {
     Serial.println("Failed to create display_task");
+  }
+  if (xTaskCreatePinnedToCore(audioTask, "audio_task", 8192, g_audioCommandQueue, 1, nullptr, 1) != pdPASS)
+  {
+    Serial.println("Failed to create audio_task");
   }
 
 #if ENABLE_BLUETOOTH

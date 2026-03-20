@@ -18,3 +18,9 @@ static const uint32_t SD_SPI_FREQ = 10000000; // 10MHz，优先稳定性
 #define EXT_FLASH_MISO 12
 #define EXT_FLASH_MOSI 13
 static const uint32_t EXT_FLASH_SPI_FREQ = 20000000; // 20MHz
+
+// I2S 音频输出引脚（WAV 播放）
+// 请按你的解码板/功放接线修改
+#define AUDIO_I2S_BCLK 25
+#define AUDIO_I2S_LRCK 33
+#define AUDIO_I2S_DOUT 32

@@ -4,4 +4,4 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
-void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue);
+void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue, QueueHandle_t audioCommandQueue);

@@ -8,9 +8,11 @@
 #include "display.h"
 #include "display_commands.h"
 #include "plana.h"
+#include "audio_player.h"
 
 static WebServer *g_server = nullptr;
 static QueueHandle_t g_displayCmdQueue = nullptr;
+static QueueHandle_t g_audioCmdQueue = nullptr;
 
 static bool pushDisplayCommand(DisplayCommandFlag flag, int32_t value = 0)
 {
@@ -21,6 +23,11 @@ static bool pushDisplayCommand(DisplayCommandFlag flag, int32_t value = 0)
 
   DisplayCommand cmd = {flag, value};
   return xQueueSend(g_displayCmdQueue, &cmd, 0) == pdTRUE;
+}
+
+static bool pushAudioCommand(AudioCommandType type)
+{
+  return enqueueAudioCommand(g_audioCmdQueue, type);
 }
 
 static bool updateExternalGifReady()
@@ -246,10 +253,58 @@ static void handleGifSync()
   g_server->send(200, "text/plain", "QUEUED");
 }
 
-void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue)
+static void handleMusicPlay()
+{
+  if (!pushAudioCommand(AUDIO_CMD_PLAY))
+  {
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
+  }
+  g_server->send(200, "text/plain", "QUEUED");
+}
+
+static void handleMusicPause()
+{
+  if (!pushAudioCommand(AUDIO_CMD_PAUSE))
+  {
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
+  }
+  g_server->send(200, "text/plain", "QUEUED");
+}
+
+static void handleMusicNext()
+{
+  if (!pushAudioCommand(AUDIO_CMD_NEXT))
+  {
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
+  }
+  g_server->send(200, "text/plain", "QUEUED");
+}
+
+static void handleMusicPrev()
+{
+  if (!pushAudioCommand(AUDIO_CMD_PREV))
+  {
+    g_server->send(503, "text/plain", "QUEUE_FULL");
+    return;
+  }
+  g_server->send(200, "text/plain", "QUEUED");
+}
+
+static void handleMusicStatus()
+{
+  String body;
+  buildAudioStatusJson(body);
+  g_server->send(200, "application/json", body);
+}
+
+void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue, QueueHandle_t audioCommandQueue)
 {
   g_server = &server;
   g_displayCmdQueue = displayCommandQueue;
+  g_audioCmdQueue = audioCommandQueue;
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/next", HTTP_GET, handleNext);
@@ -262,4 +317,9 @@ void registerWebHandlers(WebServer &server, QueueHandle_t displayCommandQueue)
   server.on("/gifstatus", HTTP_GET, handleGifStatus);
   server.on("/gif", HTTP_GET, handleGif);
   server.on("/gifsync", HTTP_GET, handleGifSync);
+  server.on("/music/play", HTTP_GET, handleMusicPlay);
+  server.on("/music/pause", HTTP_GET, handleMusicPause);
+  server.on("/music/next", HTTP_GET, handleMusicNext);
+  server.on("/music/prev", HTTP_GET, handleMusicPrev);
+  server.on("/music/status", HTTP_GET, handleMusicStatus);
 }
