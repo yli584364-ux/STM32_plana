@@ -1,6 +1,45 @@
 ## 网络配置与使用说明
 <br>
 **现在的工作方式**
+
+记录一下当前的接线方式与引脚 便于后续PCB设计与外壳打印
+<br>
+屏幕:GND - GND
+   - VCC - 3.3V
+   - SCLK - 18
+   - SDA - 23
+   - RESET - 4
+   - DC - 2
+   - CS - 5
+   - BL - 15
+<br>
+SD: GND - GND
+   - VCC - 3.3V
+   - MOSI - 23
+   - MISO - 19
+   - SCK - 18
+   - CS - 32
+<br>
+FLASH: GND - GND
+  - VCC - 3.3V
+  - CS - 27
+  - D0 - 12
+  - CLK - 14
+  - D1 - 13
+<br>
+PAM8403:
+  - GND - GND
+  - L - 25
+  - R - 26 现在没用上右声道 
+ 
+
+
+
+
+
+
+
+
 <br>
 - ESP32 启动后会：
   - 开启 AP 热点：SSID 为 `ESP_LCD_AP`，密码 `12345678`
