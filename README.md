@@ -23,7 +23,7 @@ SD: GND - GND
 FLASH: GND - GND
   - VCC - 3.3V
   - CS - 27
-  - D0 - 12
+  - D0 - 22
   - CLK - 14
   - D1 - 13
 <br>

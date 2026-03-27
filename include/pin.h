@@ -15,7 +15,7 @@ static const uint32_t SD_SPI_FREQ = 10000000; // 10MHz，优先稳定性
 // 默认使用 HSPI 总线；请按你的实际接线修改
 #define EXT_FLASH_CS 27
 #define EXT_FLASH_SCK 14
-#define EXT_FLASH_MISO 12
+#define EXT_FLASH_MISO 22
 #define EXT_FLASH_MOSI 13
 static const uint32_t EXT_FLASH_SPI_FREQ = 20000000; // 20MHz
 
